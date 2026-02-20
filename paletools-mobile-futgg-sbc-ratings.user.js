@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-3';
+  const BUILD_ID = 'pt-futgg-20260220-4';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -321,30 +321,36 @@
       .map((id) => Number(id));
     if (!ids.length) return;
 
-    const chunkSize = 40;
+    const chunkSize = 20;
     const voteMap = new Map();
+    let failedChunks = 0;
 
     for (let i = 0; i < ids.length; i += chunkSize) {
       const chunk = ids.slice(i, i + chunkSize);
       const identifiers = chunk.map((id) => `20_${id}`).join(',');
-      const payloadChunk = await requestJson(`${FUTGG_VOTING_URL}${encodeURIComponent(identifiers)}`);
-      const data = Array.isArray(payloadChunk?.data) ? payloadChunk.data : [];
+      try {
+        const payloadChunk = await requestJson(`${FUTGG_VOTING_URL}${encodeURIComponent(identifiers)}`);
+        const data = Array.isArray(payloadChunk?.data) ? payloadChunk.data : [];
 
-      for (const row of data) {
-        const key = String(row?.entityIdentifier || '');
-        const m = /^20_(\d+)$/.exec(key);
-        if (!m) continue;
-        const id = Number(m[1]);
-        const up = Number(row?.upvotes || 0);
-        const down = Number(row?.downvotes || 0);
-        const total = Number(row?.totalVotes || up + down || 0);
-        const upPct = total > 0 ? Math.round((up * 100) / total) : null;
-        voteMap.set(id, { up, down, total, upPct });
+        for (const row of data) {
+          const key = String(row?.entityIdentifier || '');
+          const m = /^20_(\d+)$/.exec(key);
+          if (!m) continue;
+          const id = Number(m[1]);
+          const up = Number(row?.upvotes || 0);
+          const down = Number(row?.downvotes || 0);
+          const total = Number(row?.totalVotes || up + down || 0);
+          const upPct = total > 0 ? Math.round((up * 100) / total) : null;
+          voteMap.set(id, { up, down, total, upPct });
+        }
+      } catch (err) {
+        failedChunks += 1;
+        logLine(`votes: chunk failed start=${i} size=${chunk.length} :: ${String(err)}`);
       }
     }
 
     state.votesById = voteMap;
-    logLine(`votes: loaded entries=${voteMap.size}`);
+    logLine(`votes: loaded entries=${voteMap.size} failedChunks=${failedChunks}`);
   }
 
   function gmRequest(url) {

@@ -25,6 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   'use strict';
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
+  const BUILD_ID = 'pt-futgg-20260220-1';
   const REQUEST_TIMEOUT_MS = 10000;
   const FUTGG_PROXY_URLS = [
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
@@ -521,6 +522,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   async function init() {
     ensureStyles();
     ensureLogUi();
+    logLine(`build: ${BUILD_ID}`);
     logLine('init: started');
     await ensureData();
     if (!state.loaded) return;

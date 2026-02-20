@@ -31,6 +31,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   ];
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
+  const LOG_TOGGLE_CLASS = 'pt-futgg-log-toggle';
+  const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
   const CARD_FLAG = 'ptFutggRatingBound';
 
   const state = {
@@ -40,7 +42,75 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     lastScanAt: 0,
     statusNode: null,
     lastStatusKey: '',
+    logLines: [],
+    logPanel: null,
+    logPre: null,
+    logToggle: null,
   };
+
+  function logLine(message) {
+    const ts = new Date().toISOString();
+    const line = `${ts} ${message}`;
+    state.logLines.push(line);
+    if (state.logLines.length > 250) state.logLines.shift();
+    console.log(`[PT FUT.GG] ${message}`);
+    if (state.logPre) state.logPre.textContent = state.logLines.join('\n');
+  }
+
+  function ensureLogUi() {
+    if (!document.body) return;
+    if (!state.logToggle) {
+      const toggle = document.createElement('button');
+      toggle.className = LOG_TOGGLE_CLASS;
+      toggle.type = 'button';
+      toggle.textContent = 'FUT.GG Logs';
+      toggle.addEventListener('click', () => {
+        if (!state.logPanel) return;
+        state.logPanel.classList.toggle('open');
+        if (state.logPre) state.logPre.textContent = state.logLines.join('\n');
+      });
+      document.body.appendChild(toggle);
+      state.logToggle = toggle;
+    }
+
+    if (!state.logPanel) {
+      const panel = document.createElement('div');
+      panel.className = LOG_PANEL_CLASS;
+
+      const actions = document.createElement('div');
+      actions.className = 'pt-futgg-log-actions';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.textContent = 'Copy Logs';
+      copyBtn.addEventListener('click', async () => {
+        const text = state.logLines.join('\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          setStatus('logs copied', 'ok');
+        } catch {
+          setStatus('clipboard blocked', 'warn');
+        }
+      });
+
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.textContent = 'Close';
+      closeBtn.addEventListener('click', () => panel.classList.remove('open'));
+
+      const pre = document.createElement('pre');
+      pre.className = 'pt-futgg-log-pre';
+      pre.textContent = state.logLines.join('\n');
+
+      actions.appendChild(copyBtn);
+      actions.appendChild(closeBtn);
+      panel.appendChild(actions);
+      panel.appendChild(pre);
+      document.body.appendChild(panel);
+      state.logPanel = panel;
+      state.logPre = pre;
+    }
+  }
 
   function ensureStatusNode() {
     if (state.statusNode && document.body?.contains(state.statusNode)) return state.statusNode;
@@ -63,6 +133,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     node.textContent = `FUT.GG SBC: ${message}`;
     node.dataset.kind = kind;
+    logLine(`status:${kind}:${message}`);
   }
 
   function normalize(text) {
@@ -128,8 +199,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   }
 
   function gmRequest(url) {
+    logLine('request: GM_xmlhttpRequest start');
     return new Promise((resolve, reject) => {
       if (typeof GM_xmlhttpRequest !== 'function') {
+        logLine('request: GM_xmlhttpRequest unavailable');
         reject(new Error('GM_xmlhttpRequest unavailable'));
         return;
       }
@@ -139,13 +212,21 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         url,
         onload: (response) => {
           try {
+            logLine(`request: GM_xmlhttpRequest success (${response.status})`);
             resolve(JSON.parse(response.responseText));
           } catch (err) {
+            logLine(`request: parse error ${String(err)}`);
             reject(err);
           }
         },
-        onerror: reject,
-        ontimeout: reject,
+        onerror: (err) => {
+          logLine(`request: GM_xmlhttpRequest error ${String(err)}`);
+          reject(err);
+        },
+        ontimeout: (err) => {
+          logLine('request: GM_xmlhttpRequest timeout');
+          reject(err);
+        },
       });
     });
   }
@@ -156,12 +237,15 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     for (const candidate of urls) {
       try {
+        logLine(`request: fetch ${candidate}`);
         const response = await fetch(candidate, { credentials: 'omit' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         if (candidate !== url) setStatus('using CORS proxy', 'warn');
+        logLine(`request: fetch success ${candidate}`);
         return payload;
       } catch (err) {
+        logLine(`request: fetch failed ${candidate} :: ${String(err)}`);
         lastError = err;
       }
     }
@@ -183,6 +267,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       .then((payload) => {
         state.byName = indexSbcs(payload);
         state.loaded = true;
+        logLine(`data: indexed entries=${state.byName.size}`);
         if (state.byName.size) {
           setStatus(`ready (${state.byName.size} SBCs)`, 'ok');
         } else {
@@ -190,6 +275,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         }
       })
       .catch((err) => {
+        logLine(`data: load failed ${String(err)}`);
         setStatus('failed to load ratings', 'error');
         console.warn('[PT FUT.GG Ratings] Failed to load SBC ratings', err);
       })
@@ -296,6 +382,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       setStatus(`matched ${matched} on screen`, 'ok');
     } else {
       setStatus('loaded but no match on this screen', 'warn');
+      logLine(`match: no match among cards=${cards.length}`);
     }
   }
 
@@ -344,6 +431,58 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         border-color: rgba(255, 107, 107, 0.9);
         color: #ff8c8c;
       }
+      .${LOG_TOGGLE_CLASS} {
+        position: fixed;
+        right: 12px;
+        bottom: 52px;
+        z-index: 2147483647;
+        padding: 4px 8px;
+        border-radius: 7px;
+        border: 1px solid rgba(78, 230, 235, 0.7);
+        background: rgba(22, 26, 33, 0.95);
+        color: #4ee6eb;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .${LOG_PANEL_CLASS} {
+        display: none;
+        position: fixed;
+        left: 8px;
+        right: 8px;
+        bottom: 84px;
+        max-height: 45vh;
+        z-index: 2147483647;
+        border: 1px solid rgba(78, 230, 235, 0.7);
+        border-radius: 8px;
+        background: rgba(12, 15, 20, 0.98);
+        color: #d7dde6;
+        overflow: hidden;
+      }
+      .${LOG_PANEL_CLASS}.open { display: block; }
+      .pt-futgg-log-actions {
+        display: flex;
+        gap: 8px;
+        padding: 8px;
+        border-bottom: 1px solid rgba(78, 230, 235, 0.25);
+      }
+      .pt-futgg-log-actions button {
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid rgba(78, 230, 235, 0.7);
+        background: transparent;
+        color: #4ee6eb;
+        font-size: 11px;
+      }
+      .pt-futgg-log-pre {
+        margin: 0;
+        padding: 8px;
+        max-height: calc(45vh - 42px);
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 10px;
+        line-height: 1.3;
+      }
     `;
 
     document.head.appendChild(style);
@@ -362,8 +501,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   async function init() {
     ensureStyles();
+    ensureLogUi();
+    logLine('init: started');
     await ensureData();
     if (!state.loaded) return;
+    logLine('init: observer start');
     bootObserver();
   }
 
@@ -371,12 +513,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     document.addEventListener('DOMContentLoaded', () => {
       init().catch((err) => {
         setStatus('init failed', 'error');
+        logLine(`init: failed ${String(err)}`);
         console.warn('[PT FUT.GG Ratings] init failed', err);
       });
     });
   } else {
     init().catch((err) => {
       setStatus('init failed', 'error');
+      logLine(`init: failed ${String(err)}`);
       console.warn('[PT FUT.GG Ratings] init failed', err);
     });
   }

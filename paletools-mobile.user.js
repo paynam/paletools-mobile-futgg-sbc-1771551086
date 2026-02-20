@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-6';
+  const BUILD_ID = 'pt-futgg-20260220-7';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -377,6 +377,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (document.querySelector(selector)) return true;
     }
     const text = (document.body?.textContent || '').toLowerCase();
+    if (text.includes('find lowest market price') || text.includes('copy player name')) return true;
     if (text.includes('skill moves') && text.includes('weak foot')) return true;
     if (text.includes('player bio') || text.includes('player details')) return true;
     return false;

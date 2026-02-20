@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-9';
+  const BUILD_ID = 'pt-futgg-20260220-10';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -241,6 +241,43 @@
       host.appendChild(btn);
       logLine('logs: injected FUT.GG Logs item into settings menu');
     }
+  }
+
+  function setPrimaryText(node, text) {
+    const selectors = ['.label', '.title', '.name', '.btn-text', 'span', 'div'];
+    for (const selector of selectors) {
+      const target = node.querySelector(selector);
+      if (!target) continue;
+      if ((target.textContent || '').trim().length < 1) continue;
+      target.textContent = text;
+      return;
+    }
+    node.textContent = text;
+  }
+
+  function ensurePaletoolsSettingsLogsHook() {
+    const titleNode = document.querySelector('[id^="plugin-title-"], [class*="plugin-title-"]');
+    if (!titleNode) return;
+
+    const rowTemplate =
+      titleNode.closest('button, .listFUTItem, li, .ut-list-row-view, .ut-list-item-view, .row, .ut-clickable') || titleNode;
+    const host = rowTemplate.parentElement || titleNode.parentElement;
+    if (!host) return;
+    if (host.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`)) return;
+
+    const item = rowTemplate.cloneNode(true);
+    item.classList.add(SETTINGS_LOG_ITEM_CLASS);
+    item.removeAttribute?.('id');
+    item.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+    setPrimaryText(item, 'FUT.GG Logs');
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openLogsPanel();
+    });
+
+    host.appendChild(item);
+    logLine('logs: injected FUT.GG Logs item into Paletools settings list');
   }
 
   function ensureStatusNode() {
@@ -1011,6 +1048,7 @@
     ensureSelectSortHook();
     ensureListSortHook();
     ensureSettingsLogsHook();
+    ensurePaletoolsSettingsLogsHook();
 
     if (!state.loaded || !cards.length) return;
     const totalMatched = visibleWithChip + matched;

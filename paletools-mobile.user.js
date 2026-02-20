@@ -37,6 +37,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const CHIP_ANCHOR_CLASS = 'pt-futgg-sbc-card-anchor';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
+  const SORT_TOGGLE_CLASS = 'pt-futgg-sort-toggle';
   const LOG_TOGGLE_CLASS = 'pt-futgg-log-toggle';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
   const CARD_FLAG = 'ptFutggRatingBound';
@@ -53,6 +54,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     logPanel: null,
     logPre: null,
     logToggle: null,
+    sortToggle: null,
+    sortDescending: true,
   };
 
   function logLine(message) {
@@ -117,6 +120,73 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       state.logPanel = panel;
       state.logPre = pre;
     }
+  }
+
+  function scoreFromCard(card) {
+    const chip = card?.querySelector?.(`.${CHIP_CLASS}`);
+    if (!chip) return -1;
+    const txt = (chip.textContent || '').trim();
+    const m = /(\d{1,3})\s*%/.exec(txt);
+    if (m) return Number(m[1]);
+    return -1;
+  }
+
+  function sortVisibleSbcCards() {
+    const selectors = [
+      '.ut-sbc-set-tile-view',
+      '.ut-sbc-challenge-tile-view',
+      '.ut-sbc-challenge-table-row-view',
+      '.ut-sbc-challenge-row-view',
+      '.ut-sbc-set-view .tile',
+    ];
+    const cards = Array.from(document.querySelectorAll(selectors.join(',')));
+    const groups = new Map();
+
+    for (const card of cards) {
+      const parent = card.parentElement;
+      if (!parent) continue;
+      if (!groups.has(parent)) groups.set(parent, []);
+      groups.get(parent).push(card);
+    }
+
+    let moved = 0;
+    for (const [parent, group] of groups.entries()) {
+      if (group.length < 2) continue;
+      const sorted = group
+        .slice()
+        .sort((a, b) => {
+          const sa = scoreFromCard(a);
+          const sb = scoreFromCard(b);
+          return state.sortDescending ? sb - sa : sa - sb;
+        });
+
+      for (const card of sorted) {
+        parent.appendChild(card);
+        moved += 1;
+      }
+    }
+
+    const dir = state.sortDescending ? 'desc' : 'asc';
+    setStatus(`sorted by FUT.GG ${dir}`, 'ok');
+    logLine(`sort: applied direction=${dir} moved=${moved}`);
+  }
+
+  function ensureSortUi() {
+    if (!document.body) return;
+    if (state.sortToggle) return;
+
+    const btn = document.createElement('button');
+    btn.className = SORT_TOGGLE_CLASS;
+    btn.type = 'button';
+    btn.textContent = 'Sort FUT.GG ↓';
+    btn.addEventListener('click', () => {
+      sortVisibleSbcCards();
+      state.sortDescending = !state.sortDescending;
+      btn.textContent = state.sortDescending ? 'Sort FUT.GG ↓' : 'Sort FUT.GG ↑';
+    });
+
+    document.body.appendChild(btn);
+    state.sortToggle = btn;
   }
 
   function ensureStatusNode() {
@@ -550,6 +620,19 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         font-size: 11px;
         font-weight: 700;
       }
+      .${SORT_TOGGLE_CLASS} {
+        position: fixed;
+        right: 12px;
+        bottom: 84px;
+        z-index: 2147483647;
+        padding: 4px 8px;
+        border-radius: 7px;
+        border: 1px solid rgba(78, 230, 235, 0.7);
+        background: rgba(22, 26, 33, 0.95);
+        color: #4ee6eb;
+        font-size: 11px;
+        font-weight: 700;
+      }
       .${LOG_PANEL_CLASS} {
         display: none;
         position: fixed;
@@ -608,6 +691,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   async function init() {
     ensureStyles();
     ensureLogUi();
+    ensureSortUi();
     logLine(`build: ${BUILD_ID}`);
     logLine('init: started');
     await ensureData();

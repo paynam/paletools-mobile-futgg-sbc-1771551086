@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-8';
+  const BUILD_ID = 'pt-futgg-20260220-9';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const CHIP_ANCHOR_CLASS = 'pt-futgg-sbc-card-anchor';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
   const PLAYER_MENU_ITEM_CLASS = 'pt-futgg-player-menu-item';
-  const LOG_TOGGLE_CLASS = 'pt-futgg-log-toggle';
+  const SETTINGS_LOG_ITEM_CLASS = 'pt-futgg-settings-log-item';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
   const DROPDOWN_ITEM_CLASS = 'pt-futgg-sort-item';
   const SORT_DESC_VALUE = '__pt_futgg_desc__';
@@ -58,7 +58,6 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     logLines: [],
     logPanel: null,
     logPre: null,
-    logToggle: null,
     playerMenuNode: null,
     playerCache: new Map(),
     chemStyleNamesByGame: new Map(),
@@ -80,20 +79,6 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   function ensureLogUi() {
     if (!document.body) return;
-    if (!state.logToggle) {
-      const toggle = document.createElement('button');
-      toggle.className = LOG_TOGGLE_CLASS;
-      toggle.type = 'button';
-      toggle.textContent = 'FUT.GG Logs';
-      toggle.addEventListener('click', () => {
-        if (!state.logPanel) return;
-        state.logPanel.classList.toggle('open');
-        if (state.logPre) state.logPre.textContent = state.logLines.join('\n');
-      });
-      document.body.appendChild(toggle);
-      state.logToggle = toggle;
-    }
-
     if (!state.logPanel) {
       const panel = document.createElement('div');
       panel.className = LOG_PANEL_CLASS;
@@ -108,9 +93,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         const text = state.logLines.join('\n');
         try {
           await navigator.clipboard.writeText(text);
-          setStatus('logs copied', 'ok');
+          logLine('status:ok:logs copied');
         } catch {
-          setStatus('clipboard blocked', 'warn');
+          logLine('status:warn:clipboard blocked');
         }
       });
 
@@ -131,6 +116,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       state.logPanel = panel;
       state.logPre = pre;
     }
+  }
+
+  function openLogsPanel() {
+    ensureLogUi();
+    if (!state.logPanel) return;
+    state.logPanel.classList.add('open');
+    if (state.logPre) state.logPre.textContent = state.logLines.join('\n');
   }
 
   function scoreFromCard(card) {
@@ -241,6 +233,26 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     }
   }
 
+  function ensureSettingsLogsHook() {
+    const containers = Array.from(
+      document.querySelectorAll('.ut-drop-down-view, .ut-drop-down-pop-up, .ut-context-menu, .ut-pop-up-view, .ui-dialog')
+    );
+    for (const container of containers) {
+      const text = (container.textContent || '').toLowerCase();
+      if (!text.includes('setting')) continue;
+      if (container.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`)) continue;
+
+      const host = container.querySelector('.itemList, ul, .list, .ut-list-view, .ut-button-group') || container;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `${DROPDOWN_ITEM_CLASS} ${SETTINGS_LOG_ITEM_CLASS}`;
+      btn.textContent = 'FUT.GG Logs';
+      btn.addEventListener('click', () => openLogsPanel());
+      host.appendChild(btn);
+      logLine('logs: injected FUT.GG Logs item into settings menu');
+    }
+  }
+
   function ensureStatusNode() {
     if (state.statusNode && document.body?.contains(state.statusNode)) return state.statusNode;
     if (!document.body) return null;
@@ -253,16 +265,22 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   }
 
   function setStatus(message, kind = 'info') {
+    logLine(`status:${kind}:${message}`);
+
+    if (kind !== 'error') {
+      if (state.statusNode) state.statusNode.style.display = 'none';
+      return;
+    }
+
     const node = ensureStatusNode();
     if (!node) return;
-
     const key = `${kind}:${message}`;
     if (state.lastStatusKey === key) return;
     state.lastStatusKey = key;
 
+    node.style.display = 'block';
     node.textContent = `FUT.GG SBC: ${message}`;
     node.dataset.kind = kind;
-    logLine(`status:${kind}:${message}`);
   }
 
   function normalize(text) {
@@ -1000,6 +1018,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (processCard(card)) matched += 1;
     }
 
+    ensureSelectSortHook();
+    ensureListSortHook();
+    ensureSettingsLogsHook();
+
     if (!state.loaded || !cards.length) return;
     const totalMatched = visibleWithChip + matched;
     if (totalMatched > 0) {
@@ -1008,9 +1030,6 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       setStatus('loaded but no match on this screen', 'warn');
       logLine(`match: no match among cards=${cards.length}`);
     }
-
-    ensureSelectSortHook();
-    ensureListSortHook();
   }
 
   function ensureStyles() {
@@ -1038,6 +1057,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         position: relative !important;
       }
       .${STATUS_CLASS} {
+        display: none;
         position: fixed;
         right: 12px;
         bottom: 12px;
@@ -1085,19 +1105,6 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       .${PLAYER_MENU_ITEM_CLASS}[data-kind="error"] {
         border-color: rgba(255, 107, 107, 0.9);
         color: #ff8c8c;
-      }
-      .${LOG_TOGGLE_CLASS} {
-        position: fixed;
-        right: 12px;
-        bottom: 88px;
-        z-index: 2147483647;
-        padding: 4px 8px;
-        border-radius: 7px;
-        border: 1px solid rgba(78, 230, 235, 0.7);
-        background: rgba(22, 26, 33, 0.95);
-        color: #4ee6eb;
-        font-size: 11px;
-        font-weight: 700;
       }
       .${DROPDOWN_ITEM_CLASS} {
         width: 100%;

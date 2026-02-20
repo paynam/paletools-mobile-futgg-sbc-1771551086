@@ -35,6 +35,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
   ];
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
+  const CHIP_ANCHOR_CLASS = 'pt-futgg-sbc-card-anchor';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
   const LOG_TOGGLE_CLASS = 'pt-futgg-log-toggle';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
@@ -146,8 +147,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return (text || '')
       .toLowerCase()
       .replace(/&/g, ' and ')
+      .replace(/\b(sbc|challenge|group)\b/g, ' ')
       .replace(/[^a-z0-9]+/g, ' ')
       .trim();
+  }
+
+  function tokenSet(text) {
+    return new Set(normalize(text).split(' ').filter((t) => t.length >= 2));
   }
 
   function getFromRequirementText(requirementText) {
@@ -378,14 +384,33 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const exact = state.byName.get(key);
     if (exact?.length) return exact[0];
 
+    const keyTokens = tokenSet(key);
+    let best = null;
+    let bestScore = 0;
+
     for (const [candidate, matches] of state.byName.entries()) {
       if (candidate === key) continue;
       if (candidate.includes(key) || key.includes(candidate)) {
         return matches[0];
       }
+
+      const candidateTokens = tokenSet(candidate);
+      if (!candidateTokens.size || !keyTokens.size) continue;
+
+      let common = 0;
+      for (const token of keyTokens) {
+        if (candidateTokens.has(token)) common += 1;
+      }
+
+      const denom = Math.max(keyTokens.size, candidateTokens.size);
+      const score = denom ? common / denom : 0;
+      if (common >= 2 && score > bestScore) {
+        best = matches[0];
+        bestScore = score;
+      }
     }
 
-    return null;
+    return bestScore >= 0.5 ? best : null;
   }
 
   function formatVoteLabel(sbc) {
@@ -394,25 +419,24 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return `${vote.upPct}%`;
   }
 
-  function injectChip(targetNode, sbc) {
-    if (!targetNode || !sbc) return;
+  function injectChip(card, sbc) {
+    if (!card || !sbc) return;
     const voteLabel = formatVoteLabel(sbc);
     const fallback = sbc.ratingLabel ? `REQ ${sbc.ratingLabel}` : null;
     const text = voteLabel ? `FUT.GG ${voteLabel}` : fallback ? `FUT.GG ${fallback}` : null;
     if (!text) return;
 
-    const existing = targetNode.parentElement?.querySelector(`.${CHIP_CLASS}`);
+    const existing = card.querySelector(`.${CHIP_CLASS}`);
     if (existing) {
       existing.textContent = text;
       return;
     }
 
+    card.classList.add(CHIP_ANCHOR_CLASS);
     const chip = document.createElement('span');
     chip.className = CHIP_CLASS;
     chip.textContent = text;
-
-    const parent = targetNode.parentElement || targetNode;
-    parent.appendChild(chip);
+    card.appendChild(chip);
   }
 
   function processCard(card) {
@@ -425,7 +449,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const sbc = lookupSbcByTitle(titleText);
     if (!sbc) return false;
 
-    injectChip(titleNode, sbc);
+    injectChip(card, sbc);
     card[CARD_FLAG] = true;
     return true;
   }
@@ -445,14 +469,17 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     const cards = document.querySelectorAll(selectors.join(','));
     let matched = 0;
+    let visibleWithChip = 0;
 
     for (const card of cards) {
+      if (card.querySelector(`.${CHIP_CLASS}`)) visibleWithChip += 1;
       if (processCard(card)) matched += 1;
     }
 
     if (!state.loaded || !cards.length) return;
-    if (matched > 0) {
-      setStatus(`matched ${matched} on screen`, 'ok');
+    const totalMatched = visibleWithChip + matched;
+    if (totalMatched > 0) {
+      setStatus(`matched ${totalMatched} on screen`, 'ok');
     } else {
       setStatus('loaded but no match on this screen', 'warn');
       logLine(`match: no match among cards=${cards.length}`);
@@ -466,16 +493,22 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     style.id = 'pt-futgg-sbc-rating-style';
     style.textContent = `
       .${CHIP_CLASS} {
+        position: absolute;
+        right: 6px;
+        bottom: 6px;
+        z-index: 2;
         display: inline-flex;
-        margin-left: 6px;
-        padding: 1px 6px;
+        padding: 2px 6px;
         border-radius: 999px;
         border: 1px solid rgba(78, 230, 235, 0.7);
+        background: rgba(12, 15, 20, 0.92);
         color: #4ee6eb;
         font-size: 10px;
         font-weight: 700;
         white-space: nowrap;
-        vertical-align: middle;
+      }
+      .${CHIP_ANCHOR_CLASS} {
+        position: relative !important;
       }
       .${STATUS_CLASS} {
         position: fixed;

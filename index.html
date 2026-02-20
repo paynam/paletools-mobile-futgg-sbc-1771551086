@@ -17,19 +17,29 @@
       user-select: none;
       -webkit-user-drag: element;
     }
-    code { display: block; margin-top: 1rem; white-space: pre-wrap; word-break: break-all; background: #f5f5f5; padding: 0.75rem; border-radius: 6px; }
+    .muted { color: #666; }
   </style>
+  <script src="./mobile-bookmark.prod.js"></script>
 </head>
 <body>
   <h1>Drag This To Bookmarks Bar</h1>
-  <p>Drag the link below directly to your bookmarks bar:</p>
+  <p>Same approach as pale.tools: this link is a full inline bookmark payload.</p>
 
-  <a
-    class="drag-link"
-    draggable="true"
-    href="javascript:(()=>{fetch('https://raw.githubusercontent.com/paynam/paletools-mobile-futgg-sbc-1771551086/master/paletools-mobile.user.js?v='+Date.now()).then(r=>r.text()).then(t=>eval(t)).catch(e=>alert('PT load failed: '+e));})();"
-  >Paletools iOS (Drag Me)</a>
+  <a id="pt-bookmark" class="drag-link" draggable="true" href="#">Paletools iOS (Drag Me)</a>
+  <p class="muted" id="status">Preparing bookmark...</p>
 
-  <code>javascript:(()=>{fetch('https://raw.githubusercontent.com/paynam/paletools-mobile-futgg-sbc-1771551086/master/paletools-mobile.user.js?v='+Date.now()).then(r=>r.text()).then(t=>eval(t)).catch(e=>alert('PT load failed: '+e));})();</code>
+  <script>
+    (function () {
+      var code = (window.paletools && window.paletools['paletools-mobile-custom']) || '';
+      var link = document.getElementById('pt-bookmark');
+      var status = document.getElementById('status');
+      if (!code) {
+        status.textContent = 'Failed to load bookmark payload.';
+        return;
+      }
+      link.setAttribute('href', 'javascript:' + code);
+      status.textContent = 'Ready. Drag the link to bookmarks, then run it on the web app page.';
+    })();
+  </script>
 </body>
 </html>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paletools Bookmark Drag Link</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.4; }
+    .drag-link {
+      display: inline-block;
+      padding: 0.8rem 1rem;
+      border: 2px dashed #0b5fff;
+      border-radius: 8px;
+      text-decoration: none;
+      color: #0b5fff;
+      font-weight: 700;
+      user-select: none;
+      -webkit-user-drag: element;
+    }
+    code { display: block; margin-top: 1rem; white-space: pre-wrap; word-break: break-all; background: #f5f5f5; padding: 0.75rem; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Drag This To Bookmarks Bar</h1>
+  <p>Drag the link below directly to your bookmarks bar:</p>
+
+  <a
+    class="drag-link"
+    draggable="true"
+    href="javascript:(()=>{const s=document.createElement('script');s.src='http://192.168.2.7:45221/paletools-mobile.user.js?v='+Date.now();document.documentElement.appendChild(s);})();"
+  >Paletools LAN (Drag Me)</a>
+
+  <code>javascript:(()=>{const s=document.createElement('script');s.src='http://192.168.2.7:45221/paletools-mobile.user.js?v='+Date.now();document.documentElement.appendChild(s);})();</code>
+</body>
+</html>

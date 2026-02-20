@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-7';
+  const BUILD_ID = 'pt-futgg-20260220-8';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -37,7 +37,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const CHIP_ANCHOR_CLASS = 'pt-futgg-sbc-card-anchor';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
-  const PLAYER_PANEL_CLASS = 'pt-futgg-player-panel';
+  const PLAYER_MENU_ITEM_CLASS = 'pt-futgg-player-menu-item';
   const LOG_TOGGLE_CLASS = 'pt-futgg-log-toggle';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
   const DROPDOWN_ITEM_CLASS = 'pt-futgg-sort-item';
@@ -59,7 +59,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     logPanel: null,
     logPre: null,
     logToggle: null,
-    playerPanel: null,
+    playerMenuNode: null,
     playerCache: new Map(),
     chemStyleNamesByGame: new Map(),
     chemStyleNamesLoadByGame: new Map(),
@@ -429,23 +429,52 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return null;
   }
 
-  function ensurePlayerPanel() {
-    if (state.playerPanel && document.body?.contains(state.playerPanel)) return state.playerPanel;
-    if (!document.body) return null;
+  function findPlayerMenuHost() {
+    const actionNodes = Array.from(document.querySelectorAll('button, [role="button"], .btn-standard, .ut-button-control'));
+    for (const node of actionNodes) {
+      const text = (node.textContent || '').toLowerCase().trim();
+      if (!isVisible(node)) continue;
+      if (!text.includes('find lowest market price') && !text.includes('copy player name')) continue;
 
-    const panel = document.createElement('div');
-    panel.className = PLAYER_PANEL_CLASS;
-    panel.dataset.kind = 'info';
-    panel.textContent = 'FUT.GG Player: loading...';
-    document.body.appendChild(panel);
-    state.playerPanel = panel;
-    return panel;
+      const host = node.parentElement;
+      if (!host) continue;
+      return { host, templateNode: node };
+    }
+
+    return null;
   }
 
-  function hidePlayerPanel() {
-    if (!state.playerPanel) return;
-    state.playerPanel.remove();
-    state.playerPanel = null;
+  function removePlayerMenuItem() {
+    if (!state.playerMenuNode) return;
+    state.playerMenuNode.remove();
+    state.playerMenuNode = null;
+  }
+
+  function ensurePlayerMenuItem(hostInfo) {
+    if (!hostInfo?.host) return null;
+    const host = hostInfo.host;
+
+    if (state.playerMenuNode && host.contains(state.playerMenuNode)) return state.playerMenuNode;
+    removePlayerMenuItem();
+
+    const template = hostInfo.templateNode;
+    let node = null;
+    if (template) {
+      node = template.cloneNode(false);
+      node.classList.add(PLAYER_MENU_ITEM_CLASS);
+      if ('disabled' in node) node.disabled = true;
+      node.removeAttribute('id');
+      node.removeAttribute('data-id');
+      node.textContent = 'FUT.GG: loading...';
+    } else {
+      node = document.createElement('div');
+      node.className = PLAYER_MENU_ITEM_CLASS;
+      node.textContent = 'FUT.GG: loading...';
+    }
+
+    host.appendChild(node);
+    state.playerMenuNode = node;
+    return node;
   }
 
   async function ensureChemStyleNames(game) {
@@ -480,41 +509,36 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return promise;
   }
 
-  function formatPlayerPanel(playerData) {
-    if (!playerData) return 'FUT.GG Player: no data';
-    if (playerData.error) return `FUT.GG Player: ${playerData.error}`;
+  function formatPlayerMenuText(playerData) {
+    if (!playerData) return 'FUT.GG: no data';
+    if (playerData.error) return `FUT.GG: ${playerData.error}`;
 
     const parts = [];
     if (Number.isFinite(playerData.userUpPct)) {
       const votesSuffix = Number.isFinite(playerData.userVotes) ? ` (${playerData.userVotes} votes)` : '';
-      parts.push(`User: ${playerData.userUpPct}%${votesSuffix}`);
+      parts.push(`User ${playerData.userUpPct}%${votesSuffix}`);
     } else {
-      parts.push('User: no votes');
+      parts.push('User no votes');
     }
 
     if (Number.isFinite(playerData.bestScore)) {
       const rankSuffix = Number.isFinite(playerData.bestRank) ? ` (#${playerData.bestRank})` : '';
-      parts.push(`GG: ${playerData.bestScore.toFixed(1)}${rankSuffix}`);
+      parts.push(`GG ${playerData.bestScore.toFixed(1)}${rankSuffix}`);
     }
 
     if (Array.isArray(playerData.topChemList) && playerData.topChemList.length) {
-      parts.push(`Top Chem: ${playerData.topChemList.join(', ')}`);
+      parts.push(`Chem ${playerData.topChemList.join(', ')}`);
     } else {
-      parts.push('Top Chem: unavailable');
+      parts.push('Chem unavailable');
     }
 
-    return `FUT.GG Player\n${parts.join('\n')}`;
+    return `FUT.GG: ${parts.join(' | ')}`;
   }
 
   async function loadPlayerData(game, eaId) {
     const key = `${game}-${eaId}`;
     if (state.playerCache.has(key)) return state.playerCache.get(key);
 
-    const panel = ensurePlayerPanel();
-    if (panel) {
-      panel.dataset.kind = 'info';
-      panel.textContent = 'FUT.GG Player: loading...';
-    }
     logLine(`player: loading game=${game} eaId=${eaId}`);
 
     try {
@@ -580,21 +604,38 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     installNetworkSniffer();
 
+    if (!isLikelyPlayerDetailsView()) {
+      removePlayerMenuItem();
+      return;
+    }
+
+    const hostInfo = findPlayerMenuHost();
+    if (!hostInfo?.host) {
+      removePlayerMenuItem();
+      const debugKey = 'menu-host-missing';
+      if (state.lastPlayerDebugKey !== debugKey) {
+        state.lastPlayerDebugKey = debugKey;
+        logLine('player: menu host missing on details page');
+      }
+      return;
+    }
+
+    const menuItem = ensurePlayerMenuItem(hostInfo);
+    if (menuItem) {
+      menuItem.dataset.kind = 'info';
+      menuItem.textContent = 'FUT.GG: loading...';
+    }
+
     const ctx = findPlayerContext();
     if (!ctx || !Number.isFinite(ctx.eaId)) {
-      if (isLikelyPlayerDetailsView()) {
-        const panel = ensurePlayerPanel();
-        if (panel) {
-          panel.dataset.kind = 'warn';
-          panel.textContent = 'FUT.GG Player\nID not detected yet\nOpen FUT.GG Logs and copy logs';
-        }
-        const debugKey = `missing:${state.recentPlayerIds[0]?.eaId || 'none'}`;
-        if (state.lastPlayerDebugKey !== debugKey) {
-          state.lastPlayerDebugKey = debugKey;
-          logLine(`player: context missing recent=${state.recentPlayerIds[0]?.eaId || 'none'} candidates=${state.recentPlayerIds.length}`);
-        }
-      } else {
-        hidePlayerPanel();
+      if (menuItem) {
+        menuItem.dataset.kind = 'warn';
+        menuItem.textContent = 'FUT.GG: ID not detected (open FUT.GG Logs)';
+      }
+      const debugKey = `missing:${state.recentPlayerIds[0]?.eaId || 'none'}`;
+      if (state.lastPlayerDebugKey !== debugKey) {
+        state.lastPlayerDebugKey = debugKey;
+        logLine(`player: context missing recent=${state.recentPlayerIds[0]?.eaId || 'none'} candidates=${state.recentPlayerIds.length}`);
       }
       return;
     }
@@ -607,18 +648,16 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     }
     const cached = state.playerCache.get(key);
     if (cached) {
-      const panel = ensurePlayerPanel();
-      if (!panel) return;
-      panel.dataset.kind = cached.error ? 'error' : 'ok';
-      panel.textContent = formatPlayerPanel(cached);
+      if (!menuItem) return;
+      menuItem.dataset.kind = cached.error ? 'error' : 'ok';
+      menuItem.textContent = formatPlayerMenuText(cached);
       return;
     }
 
     const payload = await loadPlayerData(ctx.game, ctx.eaId);
-    const panel = ensurePlayerPanel();
-    if (!panel) return;
-    panel.dataset.kind = payload.error ? 'error' : 'ok';
-    panel.textContent = formatPlayerPanel(payload);
+    if (!menuItem) return;
+    menuItem.dataset.kind = payload.error ? 'error' : 'ok';
+    menuItem.textContent = formatPlayerMenuText(payload);
   }
 
   function getFromRequirementText(requirementText) {
@@ -1025,37 +1064,27 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         border-color: rgba(255, 107, 107, 0.9);
         color: #ff8c8c;
       }
-      .${PLAYER_PANEL_CLASS} {
-        position: fixed;
-        left: 12px;
-        bottom: 12px;
-        z-index: 2147483647;
-        max-width: 72vw;
+      .${PLAYER_MENU_ITEM_CLASS} {
+        width: 100%;
+        margin-top: 6px;
         padding: 8px 10px;
-        border-radius: 8px;
-        border: 1px solid #7f8b99;
-        background: rgba(22, 26, 33, 0.97);
-        color: #d7dde6;
-        font-size: 11px;
-        font-weight: 700;
-        white-space: pre-line;
-        line-height: 1.3;
-      }
-      .${PLAYER_PANEL_CLASS}[data-kind="ok"] {
-        border-color: rgba(78, 230, 235, 0.8);
+        border-radius: 6px;
+        border: 1px solid rgba(78, 230, 235, 0.7);
+        background: rgba(22, 26, 33, 0.95);
         color: #4ee6eb;
+        text-align: left;
+        font-size: 12px;
+        font-weight: 700;
+        white-space: normal;
+        line-height: 1.25;
       }
-      .${PLAYER_PANEL_CLASS}[data-kind="error"] {
+      .${PLAYER_MENU_ITEM_CLASS}[data-kind="warn"] {
+        border-color: rgba(255, 196, 0, 0.85);
+        color: #ffd25e;
+      }
+      .${PLAYER_MENU_ITEM_CLASS}[data-kind="error"] {
         border-color: rgba(255, 107, 107, 0.9);
         color: #ff8c8c;
-      }
-      .${PLAYER_PANEL_CLASS}[data-kind="info"] {
-        border-color: rgba(255, 196, 0, 0.85);
-        color: #ffd25e;
-      }
-      .${PLAYER_PANEL_CLASS}[data-kind="warn"] {
-        border-color: rgba(255, 196, 0, 0.85);
-        color: #ffd25e;
       }
       .${LOG_TOGGLE_CLASS} {
         position: fixed;

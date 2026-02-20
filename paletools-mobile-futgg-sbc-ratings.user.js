@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-2';
+  const BUILD_ID = 'pt-futgg-20260220-3';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -247,6 +247,8 @@
   function normalize(text) {
     return (text || '')
       .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
       .replace(/&/g, ' and ')
       .replace(/\b(sbc|challenge|group)\b/g, ' ')
       .replace(/[^a-z0-9]+/g, ' ')
@@ -295,7 +297,6 @@
       const key = normalize(set?.name);
       if (!key) continue;
       const ratingLabel = formatRatings(set);
-      if (!ratingLabel) continue;
 
       const item = {
         key,

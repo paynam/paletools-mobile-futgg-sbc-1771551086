@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Paletools Mobile - FUT.GG SBC Ratings
 // @namespace    https://pale.tools/fifa/
-// @version      1.0.0
-// @description  Show FUT.GG SBC rating requirements on Companion SBC tiles.
+// @version      1.1.0
+// @description  Show FUT.GG SBC ratings and player details ratings in Companion.
 // @author       local
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-4';
+  const BUILD_ID = 'pt-futgg-20260220-5';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -27,12 +27,14 @@
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const CHIP_ANCHOR_CLASS = 'pt-futgg-sbc-card-anchor';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
+  const PLAYER_PANEL_CLASS = 'pt-futgg-player-panel';
   const LOG_TOGGLE_CLASS = 'pt-futgg-log-toggle';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
   const DROPDOWN_ITEM_CLASS = 'pt-futgg-sort-item';
   const SORT_DESC_VALUE = '__pt_futgg_desc__';
   const SORT_ASC_VALUE = '__pt_futgg_asc__';
   const CARD_FLAG = 'ptFutggRatingBound';
+  const PLAYER_CONTENT_TYPE = 27;
 
   const state = {
     byName: new Map(),
@@ -46,6 +48,11 @@
     logPanel: null,
     logPre: null,
     logToggle: null,
+    playerPanel: null,
+    playerCache: new Map(),
+    chemStyleNamesByGame: new Map(),
+    chemStyleNamesLoadByGame: new Map(),
+    lastPlayerScanAt: 0,
   };
 
   function logLine(message) {
@@ -257,6 +264,222 @@
 
   function tokenSet(text) {
     return new Set(normalize(text).split(' ').filter((t) => t.length >= 2));
+  }
+
+  function toTitle(text) {
+    return String(text || '')
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  }
+
+  function isVisible(node) {
+    if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+    const rect = node.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) return false;
+    const style = window.getComputedStyle(node);
+    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+  }
+
+  function parseGameEaIdFromText(text) {
+    const match = /(?:^|\/|[^0-9])(\d{2})-(\d{5,10})(?:\/|$|[^0-9])/i.exec(text || '');
+    if (!match) return null;
+    return { game: match[1], eaId: Number(match[2]) };
+  }
+
+  function findPlayerContext() {
+    const linkSelectors = ['a[href*="fut.gg/players/"]', 'a[href*="/compare/"]', 'a[href*="/players/"]'];
+
+    for (const selector of linkSelectors) {
+      const links = document.querySelectorAll(selector);
+      for (const link of links) {
+        const href = link.getAttribute('href') || '';
+        const parsed = parseGameEaIdFromText(href);
+        if (parsed && isVisible(link)) return parsed;
+      }
+    }
+
+    const mediaNodes = document.querySelectorAll('img[src], source[srcset]');
+    for (const node of mediaNodes) {
+      const src = node.getAttribute('src') || node.getAttribute('srcset') || '';
+      const parsed = parseGameEaIdFromText(src);
+      if (parsed && isVisible(node)) return parsed;
+    }
+
+    return null;
+  }
+
+  function ensurePlayerPanel() {
+    if (state.playerPanel && document.body?.contains(state.playerPanel)) return state.playerPanel;
+    if (!document.body) return null;
+
+    const panel = document.createElement('div');
+    panel.className = PLAYER_PANEL_CLASS;
+    panel.dataset.kind = 'info';
+    panel.textContent = 'FUT.GG Player: loading...';
+    document.body.appendChild(panel);
+    state.playerPanel = panel;
+    return panel;
+  }
+
+  function hidePlayerPanel() {
+    if (!state.playerPanel) return;
+    state.playerPanel.remove();
+    state.playerPanel = null;
+  }
+
+  async function ensureChemStyleNames(game) {
+    if (state.chemStyleNamesByGame.has(game)) return state.chemStyleNamesByGame.get(game);
+    if (state.chemStyleNamesLoadByGame.has(game)) return state.chemStyleNamesLoadByGame.get(game);
+
+    const promise = withHardTimeout(
+      requestJson(`https://www.fut.gg/api/fut/${game}/fut-core-data/`),
+      REQUEST_HARD_TIMEOUT_MS,
+      'Core data request'
+    )
+      .then((payload) => {
+        const rows = Array.isArray(payload?.data?.chemistryStyles) ? payload.data.chemistryStyles : [];
+        const map = new Map();
+        for (const row of rows) {
+          const id = Number(row?.id);
+          if (!Number.isFinite(id)) continue;
+          map.set(id, toTitle(row?.name || row?.shortName || `Style ${id}`));
+        }
+        state.chemStyleNamesByGame.set(game, map);
+        return map;
+      })
+      .catch((err) => {
+        logLine(`player: chem style names load failed game=${game} :: ${String(err)}`);
+        return new Map();
+      })
+      .finally(() => {
+        state.chemStyleNamesLoadByGame.delete(game);
+      });
+
+    state.chemStyleNamesLoadByGame.set(game, promise);
+    return promise;
+  }
+
+  function formatPlayerPanel(playerData) {
+    if (!playerData) return 'FUT.GG Player: no data';
+    if (playerData.error) return `FUT.GG Player: ${playerData.error}`;
+
+    const parts = [];
+    if (Number.isFinite(playerData.userUpPct)) {
+      const votesSuffix = Number.isFinite(playerData.userVotes) ? ` (${playerData.userVotes} votes)` : '';
+      parts.push(`User: ${playerData.userUpPct}%${votesSuffix}`);
+    } else {
+      parts.push('User: no votes');
+    }
+
+    if (Number.isFinite(playerData.bestScore)) {
+      const rankSuffix = Number.isFinite(playerData.bestRank) ? ` (#${playerData.bestRank})` : '';
+      parts.push(`GG: ${playerData.bestScore.toFixed(1)}${rankSuffix}`);
+    }
+
+    if (Array.isArray(playerData.topChemList) && playerData.topChemList.length) {
+      parts.push(`Top Chem: ${playerData.topChemList.join(', ')}`);
+    } else {
+      parts.push('Top Chem: unavailable');
+    }
+
+    return `FUT.GG Player\n${parts.join('\n')}`;
+  }
+
+  async function loadPlayerData(game, eaId) {
+    const key = `${game}-${eaId}`;
+    if (state.playerCache.has(key)) return state.playerCache.get(key);
+
+    const panel = ensurePlayerPanel();
+    if (panel) {
+      panel.dataset.kind = 'info';
+      panel.textContent = 'FUT.GG Player: loading...';
+    }
+    logLine(`player: loading game=${game} eaId=${eaId}`);
+
+    try {
+      const itemPayload = await withHardTimeout(
+        requestJson(`https://www.fut.gg/api/fut/player-item-definitions/${game}/${eaId}/?`),
+        REQUEST_HARD_TIMEOUT_MS,
+        'Player definition request'
+      );
+      const itemId = Number(itemPayload?.data?.id);
+      const identifiers = Number.isFinite(itemId) ? `${PLAYER_CONTENT_TYPE}_${itemId}` : null;
+
+      const [voteResult, metarankResult, chemResult, chemNameMap] = await Promise.all([
+        identifiers
+          ? withHardTimeout(requestJson(`${FUTGG_VOTING_URL}${encodeURIComponent(identifiers)}`), REQUEST_HARD_TIMEOUT_MS, 'Player voting request')
+          : Promise.resolve(null),
+        withHardTimeout(requestJson(`https://www.fut.gg/api/fut/metarank/player/${eaId}/`), REQUEST_HARD_TIMEOUT_MS, 'Player metarank request'),
+        withHardTimeout(requestJson(`https://www.fut.gg/api/fut/players/${game}/${eaId}/chemistry-style/`), REQUEST_HARD_TIMEOUT_MS, 'Player chemistry request'),
+        ensureChemStyleNames(game),
+      ]);
+
+      const voteRow = Array.isArray(voteResult?.data) ? voteResult.data[0] : null;
+      const up = Number(voteRow?.upvotes || 0);
+      const total = Number(voteRow?.totalVotes || up + Number(voteRow?.downvotes || 0) || 0);
+      const userUpPct = total > 0 ? Math.round((up * 100) / total) : null;
+
+      const scores = Array.isArray(metarankResult?.data?.scores) ? metarankResult.data.scores.slice() : [];
+      scores.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
+      const best = scores[0] || null;
+
+      const topStyles = Array.isArray(chemResult?.data?.top3ChemistryStyles) ? chemResult.data.top3ChemistryStyles : [];
+      const topChemList = topStyles
+        .map((entry) => {
+          const id = Number(Array.isArray(entry) ? entry[0] : null);
+          const pct = Number(Array.isArray(entry) ? entry[1] : null);
+          if (!Number.isFinite(id) || !Number.isFinite(pct)) return null;
+          const name = chemNameMap.get(id) || `Style ${id}`;
+          return `${name} ${pct}%`;
+        })
+        .filter(Boolean);
+
+      const payload = {
+        userUpPct,
+        userVotes: total,
+        bestScore: Number.isFinite(Number(best?.score)) ? Number(best.score) : null,
+        bestRank: Number.isFinite(Number(best?.rank)) ? Number(best.rank) : null,
+        topChemList,
+      };
+      state.playerCache.set(key, payload);
+      logLine(`player: loaded game=${game} eaId=${eaId} userPct=${payload.userUpPct ?? 'na'} topChem=${payload.topChemList.length}`);
+      return payload;
+    } catch (err) {
+      const payload = { error: 'failed to load player ratings' };
+      state.playerCache.set(key, payload);
+      logLine(`player: load failed game=${game} eaId=${eaId} :: ${String(err)}`);
+      return payload;
+    }
+  }
+
+  async function scanPlayerDetails() {
+    const now = Date.now();
+    if (now - state.lastPlayerScanAt < 350) return;
+    state.lastPlayerScanAt = now;
+
+    const ctx = findPlayerContext();
+    if (!ctx || !Number.isFinite(ctx.eaId)) {
+      hidePlayerPanel();
+      return;
+    }
+
+    const key = `${ctx.game}-${ctx.eaId}`;
+    const cached = state.playerCache.get(key);
+    if (cached) {
+      const panel = ensurePlayerPanel();
+      if (!panel) return;
+      panel.dataset.kind = cached.error ? 'error' : 'ok';
+      panel.textContent = formatPlayerPanel(cached);
+      return;
+    }
+
+    const payload = await loadPlayerData(ctx.game, ctx.eaId);
+    const panel = ensurePlayerPanel();
+    if (!panel) return;
+    panel.dataset.kind = payload.error ? 'error' : 'ok';
+    panel.textContent = formatPlayerPanel(payload);
   }
 
   function getFromRequirementText(requirementText) {
@@ -663,10 +886,38 @@
         border-color: rgba(255, 107, 107, 0.9);
         color: #ff8c8c;
       }
+      .${PLAYER_PANEL_CLASS} {
+        position: fixed;
+        left: 12px;
+        bottom: 12px;
+        z-index: 2147483647;
+        max-width: 72vw;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid #7f8b99;
+        background: rgba(22, 26, 33, 0.97);
+        color: #d7dde6;
+        font-size: 11px;
+        font-weight: 700;
+        white-space: pre-line;
+        line-height: 1.3;
+      }
+      .${PLAYER_PANEL_CLASS}[data-kind="ok"] {
+        border-color: rgba(78, 230, 235, 0.8);
+        color: #4ee6eb;
+      }
+      .${PLAYER_PANEL_CLASS}[data-kind="error"] {
+        border-color: rgba(255, 107, 107, 0.9);
+        color: #ff8c8c;
+      }
+      .${PLAYER_PANEL_CLASS}[data-kind="info"] {
+        border-color: rgba(255, 196, 0, 0.85);
+        color: #ffd25e;
+      }
       .${LOG_TOGGLE_CLASS} {
         position: fixed;
         right: 12px;
-        bottom: 52px;
+        bottom: 88px;
         z-index: 2147483647;
         padding: 4px 8px;
         border-radius: 7px;
@@ -733,14 +984,21 @@
   }
 
   function bootObserver() {
-    const observer = new MutationObserver(() => scanCards());
+    const observer = new MutationObserver(() => {
+      scanCards();
+      scanPlayerDetails().catch((err) => logLine(`player: scan failed ${String(err)}`));
+    });
     observer.observe(document.body, {
       childList: true,
       subtree: true,
     });
 
     setInterval(scanCards, 1500);
+    setInterval(() => {
+      scanPlayerDetails().catch((err) => logLine(`player: scan failed ${String(err)}`));
+    }, 1500);
     scanCards();
+    scanPlayerDetails().catch((err) => logLine(`player: scan failed ${String(err)}`));
   }
 
   async function init() {
@@ -749,7 +1007,6 @@
     logLine(`build: ${BUILD_ID}`);
     logLine('init: started');
     await ensureData();
-    if (!state.loaded) return;
     logLine('init: observer start');
     bootObserver();
   }

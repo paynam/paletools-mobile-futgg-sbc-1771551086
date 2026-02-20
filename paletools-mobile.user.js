@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-10';
+  const BUILD_ID = 'pt-futgg-20260220-11';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -343,6 +343,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       .replace(/\b[a-z]/g, (c) => c.toUpperCase());
   }
 
+  function formatCoins(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return `${Math.round(num)}`;
+  }
+
   function isVisible(node) {
     if (!node || typeof node.getBoundingClientRect !== 'function') return false;
     const rect = node.getBoundingClientRect();
@@ -587,6 +595,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       parts.push('Chem unavailable');
     }
 
+    if (Number.isFinite(playerData.price) && playerData.price > 0) {
+      parts.push(`Price ${formatCoins(playerData.price)}`);
+    } else {
+      parts.push('Price n/a');
+    }
+
     return `FUT.GG: ${parts.join(' | ')}`;
   }
 
@@ -605,12 +619,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       const itemId = Number(itemPayload?.data?.id);
       const identifiers = Number.isFinite(itemId) ? `${PLAYER_CONTENT_TYPE}_${itemId}` : null;
 
-      const [voteResult, metarankResult, chemResult, chemNameMap] = await Promise.all([
+      const [voteResult, metarankResult, chemResult, priceResult, chemNameMap] = await Promise.all([
         identifiers
           ? withHardTimeout(requestJson(`${FUTGG_VOTING_URL}${encodeURIComponent(identifiers)}`), REQUEST_HARD_TIMEOUT_MS, 'Player voting request')
           : Promise.resolve(null),
         withHardTimeout(requestJson(`https://www.fut.gg/api/fut/metarank/player/${eaId}/`), REQUEST_HARD_TIMEOUT_MS, 'Player metarank request'),
         withHardTimeout(requestJson(`https://www.fut.gg/api/fut/players/${game}/${eaId}/chemistry-style/`), REQUEST_HARD_TIMEOUT_MS, 'Player chemistry request'),
+        withHardTimeout(requestJson(`https://www.fut.gg/api/fut/player-prices/${game}/${eaId}/`), REQUEST_HARD_TIMEOUT_MS, 'Player price request').catch(() => null),
         ensureChemStyleNames(game),
       ]);
 
@@ -640,6 +655,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         bestScore: Number.isFinite(Number(best?.score)) ? Number(best.score) : null,
         bestRank: Number.isFinite(Number(best?.rank)) ? Number(best.rank) : null,
         topChemList,
+        price:
+          Number(priceResult?.data?.currentPrice?.price) ||
+          Number(priceResult?.data?.overview?.averageBin) ||
+          Number(priceResult?.data?.overview?.cheapestSale) ||
+          null,
       };
       state.playerCache.set(key, payload);
       logLine(`player: loaded game=${game} eaId=${eaId} userPct=${payload.userUpPct ?? 'na'} topChem=${payload.topChemList.length}`);

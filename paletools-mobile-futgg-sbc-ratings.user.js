@@ -14,6 +14,7 @@
   'use strict';
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
+  const REQUEST_TIMEOUT_MS = 10000;
   const FUTGG_PROXY_URLS = [
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url) => `https://cors.isomorphic-git.org/${url}`,
@@ -199,6 +200,7 @@
       GM_xmlhttpRequest({
         method: 'GET',
         url,
+        timeout: REQUEST_TIMEOUT_MS,
         onload: (response) => {
           try {
             logLine(`request: GM_xmlhttpRequest success (${response.status})`);
@@ -227,7 +229,12 @@
     for (const candidate of urls) {
       try {
         logLine(`request: fetch ${candidate}`);
-        const response = await fetch(candidate, { credentials: 'omit' });
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        const response = await fetch(candidate, {
+          credentials: 'omit',
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timer));
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         if (candidate !== url) setStatus('using CORS proxy', 'warn');

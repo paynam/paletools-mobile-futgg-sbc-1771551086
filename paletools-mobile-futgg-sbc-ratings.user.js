@@ -15,13 +15,14 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-1';
+  const BUILD_ID = 'pt-futgg-20260220-2';
   const REQUEST_TIMEOUT_MS = 10000;
+  const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
-    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    (url) => `https://cors.isomorphic-git.org/${url}`,
     (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+    (url) => `https://cors.isomorphic-git.org/${url}`,
+    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
   ];
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const CHIP_ANCHOR_CLASS = 'pt-futgg-sbc-card-anchor';
@@ -421,15 +422,30 @@
     return browserRequest(url);
   }
 
+  function withHardTimeout(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      promise
+        .then((v) => {
+          clearTimeout(timer);
+          resolve(v);
+        })
+        .catch((err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+    });
+  }
+
   async function ensureData() {
     if (state.loaded) return;
     if (state.loading) return state.loading;
 
     setStatus('loading ratings...', 'info');
-    state.loading = requestJson(FUTGG_SBC_LIST_URL)
+    state.loading = withHardTimeout(requestJson(FUTGG_SBC_LIST_URL), REQUEST_HARD_TIMEOUT_MS, 'SBC list request')
       .then((payload) => {
         state.byName = indexSbcs(payload);
-        return loadVotesForSbcs(payload)
+        return withHardTimeout(loadVotesForSbcs(payload), REQUEST_HARD_TIMEOUT_MS, 'Voting request')
           .catch((err) => {
             logLine(`votes: load failed ${String(err)}`);
           })

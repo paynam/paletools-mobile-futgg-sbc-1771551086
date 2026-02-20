@@ -29,6 +29,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const FUTGG_PROXY_URLS = [
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url) => `https://cors.isomorphic-git.org/${url}`,
+    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
   ];
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
@@ -241,11 +243,21 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       try {
         logLine(`request: fetch ${candidate}`);
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-        const response = await fetch(candidate, {
+        let timer = null;
+        const fetchPromise = fetch(candidate, {
           credentials: 'omit',
           signal: controller.signal,
-        }).finally(() => clearTimeout(timer));
+        });
+        const timeoutPromise = new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            try {
+              controller.abort();
+            } catch {}
+            reject(new Error(`Timeout after ${REQUEST_TIMEOUT_MS}ms`));
+          }, REQUEST_TIMEOUT_MS);
+        });
+        const response = await Promise.race([fetchPromise, timeoutPromise]);
+        clearTimeout(timer);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         if (candidate !== url) setStatus('using CORS proxy', 'warn');

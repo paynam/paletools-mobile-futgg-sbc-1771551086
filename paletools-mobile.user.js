@@ -25,6 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   'use strict';
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
+  const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
   const BUILD_ID = 'pt-futgg-20260220-1';
   const REQUEST_TIMEOUT_MS = 10000;
   const FUTGG_PROXY_URLS = [
@@ -41,6 +42,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const state = {
     byName: new Map(),
+    votesById: new Map(),
     loaded: false,
     loading: null,
     lastScanAt: 0,
@@ -190,6 +192,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
       const item = {
         key,
+        id: set.id,
         name: set.name,
         slug: set.slug,
         ratingLabel,
@@ -200,6 +203,40 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     }
 
     return byName;
+  }
+
+  async function loadVotesForSbcs(payload) {
+    const entries = Array.isArray(payload?.data) ? payload.data : [];
+    const ids = entries
+      .map((s) => s?.id)
+      .filter((id) => Number.isFinite(id))
+      .map((id) => Number(id));
+    if (!ids.length) return;
+
+    const chunkSize = 40;
+    const voteMap = new Map();
+
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize);
+      const identifiers = chunk.map((id) => `20_${id}`).join(',');
+      const payloadChunk = await requestJson(`${FUTGG_VOTING_URL}${encodeURIComponent(identifiers)}`);
+      const data = Array.isArray(payloadChunk?.data) ? payloadChunk.data : [];
+
+      for (const row of data) {
+        const key = String(row?.entityIdentifier || '');
+        const m = /^20_(\d+)$/.exec(key);
+        if (!m) continue;
+        const id = Number(m[1]);
+        const up = Number(row?.upvotes || 0);
+        const down = Number(row?.downvotes || 0);
+        const total = Number(row?.totalVotes || up + down || 0);
+        const upPct = total > 0 ? Math.round((up * 100) / total) : null;
+        voteMap.set(id, { up, down, total, upPct });
+      }
+    }
+
+    state.votesById = voteMap;
+    logLine(`votes: loaded entries=${voteMap.size}`);
   }
 
   function gmRequest(url) {
@@ -286,13 +323,19 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     state.loading = requestJson(FUTGG_SBC_LIST_URL)
       .then((payload) => {
         state.byName = indexSbcs(payload);
-        state.loaded = true;
-        logLine(`data: indexed entries=${state.byName.size}`);
-        if (state.byName.size) {
-          setStatus(`ready (${state.byName.size} SBCs)`, 'ok');
-        } else {
-          setStatus('loaded but no SBC data', 'warn');
-        }
+        return loadVotesForSbcs(payload)
+          .catch((err) => {
+            logLine(`votes: load failed ${String(err)}`);
+          })
+          .finally(() => {
+            state.loaded = true;
+            logLine(`data: indexed entries=${state.byName.size}`);
+            if (state.byName.size) {
+              setStatus(`ready (${state.byName.size} SBCs)`, 'ok');
+            } else {
+              setStatus('loaded but no SBC data', 'warn');
+            }
+          });
       })
       .catch((err) => {
         logLine(`data: load failed ${String(err)}`);
@@ -328,35 +371,45 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return null;
   }
 
-  function lookupRatingByTitle(title) {
+  function lookupSbcByTitle(title) {
     const key = normalize(title);
     if (!key) return null;
 
     const exact = state.byName.get(key);
-    if (exact?.length) return exact[0].ratingLabel;
+    if (exact?.length) return exact[0];
 
     for (const [candidate, matches] of state.byName.entries()) {
       if (candidate === key) continue;
       if (candidate.includes(key) || key.includes(candidate)) {
-        return matches[0].ratingLabel;
+        return matches[0];
       }
     }
 
     return null;
   }
 
-  function injectChip(targetNode, ratingLabel) {
-    if (!targetNode || !ratingLabel) return;
+  function formatVoteLabel(sbc) {
+    const vote = state.votesById.get(Number(sbc?.id));
+    if (!vote || vote.upPct == null) return null;
+    return `${vote.upPct}%`;
+  }
+
+  function injectChip(targetNode, sbc) {
+    if (!targetNode || !sbc) return;
+    const voteLabel = formatVoteLabel(sbc);
+    const fallback = sbc.ratingLabel ? `REQ ${sbc.ratingLabel}` : null;
+    const text = voteLabel ? `FUT.GG ${voteLabel}` : fallback ? `FUT.GG ${fallback}` : null;
+    if (!text) return;
 
     const existing = targetNode.parentElement?.querySelector(`.${CHIP_CLASS}`);
     if (existing) {
-      existing.textContent = `FUT.GG ${ratingLabel}`;
+      existing.textContent = text;
       return;
     }
 
     const chip = document.createElement('span');
     chip.className = CHIP_CLASS;
-    chip.textContent = `FUT.GG ${ratingLabel}`;
+    chip.textContent = text;
 
     const parent = targetNode.parentElement || targetNode;
     parent.appendChild(chip);
@@ -369,10 +422,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (!titleNode) return false;
 
     const titleText = titleNode.textContent.trim();
-    const ratingLabel = lookupRatingByTitle(titleText);
-    if (!ratingLabel) return false;
+    const sbc = lookupSbcByTitle(titleText);
+    if (!sbc) return false;
 
-    injectChip(titleNode, ratingLabel);
+    injectChip(titleNode, sbc);
     card[CARD_FLAG] = true;
     return true;
   }

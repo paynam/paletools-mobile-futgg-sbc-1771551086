@@ -14,6 +14,10 @@
   'use strict';
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
+  const FUTGG_PROXY_URLS = [
+    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    (url) => `https://cors.isomorphic-git.org/${url}`,
+  ];
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
   const CARD_FLAG = 'ptFutggRatingBound';
@@ -115,7 +119,7 @@
   function gmRequest(url) {
     return new Promise((resolve, reject) => {
       if (typeof GM_xmlhttpRequest !== 'function') {
-        reject(new Error('GM_xmlhttpRequest is required for cross-origin FUT.GG requests.'));
+        reject(new Error('GM_xmlhttpRequest unavailable'));
         return;
       }
 
@@ -135,12 +139,36 @@
     });
   }
 
+  async function browserRequest(url) {
+    const urls = [url].concat(FUTGG_PROXY_URLS.map((makeProxyUrl) => makeProxyUrl(url)));
+    let lastError = null;
+
+    for (const candidate of urls) {
+      try {
+        const response = await fetch(candidate, { credentials: 'omit' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        if (candidate !== url) setStatus('using CORS proxy', 'warn');
+        return payload;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    throw lastError || new Error('All request methods failed');
+  }
+
+  function requestJson(url) {
+    if (typeof GM_xmlhttpRequest === 'function') return gmRequest(url);
+    return browserRequest(url);
+  }
+
   async function ensureData() {
     if (state.loaded) return;
     if (state.loading) return state.loading;
 
     setStatus('loading ratings...', 'info');
-    state.loading = gmRequest(FUTGG_SBC_LIST_URL)
+    state.loading = requestJson(FUTGG_SBC_LIST_URL)
       .then((payload) => {
         state.byName = indexSbcs(payload);
         state.loaded = true;

@@ -37,9 +37,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const CHIP_ANCHOR_CLASS = 'pt-futgg-sbc-card-anchor';
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
-  const SORT_TOGGLE_CLASS = 'pt-futgg-sort-toggle';
   const LOG_TOGGLE_CLASS = 'pt-futgg-log-toggle';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
+  const DROPDOWN_ITEM_CLASS = 'pt-futgg-sort-item';
+  const SORT_DESC_VALUE = '__pt_futgg_desc__';
+  const SORT_ASC_VALUE = '__pt_futgg_asc__';
   const CARD_FLAG = 'ptFutggRatingBound';
 
   const state = {
@@ -54,8 +56,6 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     logPanel: null,
     logPre: null,
     logToggle: null,
-    sortToggle: null,
-    sortDescending: true,
   };
 
   function logLine(message) {
@@ -131,7 +131,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return -1;
   }
 
-  function sortVisibleSbcCards() {
+  function sortVisibleSbcCards(sortDescending = true) {
     const selectors = [
       '.ut-sbc-set-tile-view',
       '.ut-sbc-challenge-tile-view',
@@ -157,7 +157,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         .sort((a, b) => {
           const sa = scoreFromCard(a);
           const sb = scoreFromCard(b);
-          return state.sortDescending ? sb - sa : sa - sb;
+          return sortDescending ? sb - sa : sa - sb;
         });
 
       for (const card of sorted) {
@@ -166,27 +166,68 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       }
     }
 
-    const dir = state.sortDescending ? 'desc' : 'asc';
+    const dir = sortDescending ? 'desc' : 'asc';
     setStatus(`sorted by FUT.GG ${dir}`, 'ok');
     logLine(`sort: applied direction=${dir} moved=${moved}`);
   }
 
-  function ensureSortUi() {
-    if (!document.body) return;
-    if (state.sortToggle) return;
+  function ensureSelectSortHook() {
+    const selects = Array.from(document.querySelectorAll('select'));
+    for (const select of selects) {
+      if (select.dataset.ptFutggSortHooked === '1') continue;
+      const identity = `${select.id} ${select.name} ${select.className}`.toLowerCase();
+      if (!identity.includes('sort')) continue;
 
-    const btn = document.createElement('button');
-    btn.className = SORT_TOGGLE_CLASS;
-    btn.type = 'button';
-    btn.textContent = 'Sort FUT.GG ↓';
-    btn.addEventListener('click', () => {
-      sortVisibleSbcCards();
-      state.sortDescending = !state.sortDescending;
-      btn.textContent = state.sortDescending ? 'Sort FUT.GG ↓' : 'Sort FUT.GG ↑';
-    });
+      if (!Array.from(select.options).some((o) => o.value === SORT_DESC_VALUE)) {
+        const descOpt = document.createElement('option');
+        descOpt.value = SORT_DESC_VALUE;
+        descOpt.textContent = 'FUT.GG Rating (High to Low)';
+        select.appendChild(descOpt);
+      }
+      if (!Array.from(select.options).some((o) => o.value === SORT_ASC_VALUE)) {
+        const ascOpt = document.createElement('option');
+        ascOpt.value = SORT_ASC_VALUE;
+        ascOpt.textContent = 'FUT.GG Rating (Low to High)';
+        select.appendChild(ascOpt);
+      }
 
-    document.body.appendChild(btn);
-    state.sortToggle = btn;
+      select.addEventListener('change', () => {
+        if (select.value === SORT_DESC_VALUE) sortVisibleSbcCards(true);
+        if (select.value === SORT_ASC_VALUE) sortVisibleSbcCards(false);
+      });
+      select.dataset.ptFutggSortHooked = '1';
+      logLine('sort: hooked native select sort dropdown');
+    }
+  }
+
+  function ensureListSortHook() {
+    const containers = Array.from(
+      document.querySelectorAll('.ut-drop-down-view, .ut-drop-down-pop-up, .ut-context-menu, .ut-pop-up-view, .ui-dialog')
+    );
+
+    for (const container of containers) {
+      const text = (container.textContent || '').toLowerCase();
+      if (!text.includes('sort')) continue;
+      if (container.querySelector(`.${DROPDOWN_ITEM_CLASS}`)) continue;
+
+      const host = container.querySelector('.itemList, ul, .list, .ut-list-view, .ut-button-group') || container;
+
+      const descBtn = document.createElement('button');
+      descBtn.type = 'button';
+      descBtn.className = DROPDOWN_ITEM_CLASS;
+      descBtn.textContent = 'FUT.GG Rating (High to Low)';
+      descBtn.addEventListener('click', () => sortVisibleSbcCards(true));
+
+      const ascBtn = document.createElement('button');
+      ascBtn.type = 'button';
+      ascBtn.className = DROPDOWN_ITEM_CLASS;
+      ascBtn.textContent = 'FUT.GG Rating (Low to High)';
+      ascBtn.addEventListener('click', () => sortVisibleSbcCards(false));
+
+      host.appendChild(descBtn);
+      host.appendChild(ascBtn);
+      logLine('sort: injected FUT.GG options into sort dropdown list');
+    }
   }
 
   function ensureStatusNode() {
@@ -554,6 +595,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       setStatus('loaded but no match on this screen', 'warn');
       logLine(`match: no match among cards=${cards.length}`);
     }
+
+    ensureSelectSortHook();
+    ensureListSortHook();
   }
 
   function ensureStyles() {
@@ -620,17 +664,16 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         font-size: 11px;
         font-weight: 700;
       }
-      .${SORT_TOGGLE_CLASS} {
-        position: fixed;
-        right: 12px;
-        bottom: 84px;
-        z-index: 2147483647;
-        padding: 4px 8px;
-        border-radius: 7px;
+      .${DROPDOWN_ITEM_CLASS} {
+        width: 100%;
+        margin-top: 6px;
+        padding: 8px 10px;
+        border-radius: 6px;
         border: 1px solid rgba(78, 230, 235, 0.7);
         background: rgba(22, 26, 33, 0.95);
         color: #4ee6eb;
-        font-size: 11px;
+        text-align: left;
+        font-size: 12px;
         font-weight: 700;
       }
       .${LOG_PANEL_CLASS} {
@@ -691,7 +734,6 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   async function init() {
     ensureStyles();
     ensureLogUi();
-    ensureSortUi();
     logLine(`build: ${BUILD_ID}`);
     logLine('init: started');
     await ensureData();

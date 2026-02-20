@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-5';
+  const BUILD_ID = 'pt-futgg-20260220-6';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -35,6 +35,7 @@
   const SORT_ASC_VALUE = '__pt_futgg_asc__';
   const CARD_FLAG = 'ptFutggRatingBound';
   const PLAYER_CONTENT_TYPE = 27;
+  const DEFAULT_GAME = '26';
 
   const state = {
     byName: new Map(),
@@ -53,6 +54,9 @@
     chemStyleNamesByGame: new Map(),
     chemStyleNamesLoadByGame: new Map(),
     lastPlayerScanAt: 0,
+    recentPlayerIds: [],
+    networkSnifferInstalled: false,
+    lastPlayerDebugKey: '',
   };
 
   function logLine(message) {
@@ -288,6 +292,86 @@
     return { game: match[1], eaId: Number(match[2]) };
   }
 
+  function addRecentPlayerId(eaId, source) {
+    if (!Number.isFinite(eaId) || eaId < 100000) return;
+    const existing = state.recentPlayerIds.find((x) => x.eaId === eaId);
+    if (existing) {
+      existing.ts = Date.now();
+      existing.source = source;
+    } else {
+      state.recentPlayerIds.push({ eaId, source, ts: Date.now() });
+    }
+    state.recentPlayerIds.sort((a, b) => b.ts - a.ts);
+    if (state.recentPlayerIds.length > 30) state.recentPlayerIds.length = 30;
+  }
+
+  function extractEaIdsFromText(text) {
+    const out = [];
+    const re = /\b(\d{6,9})\b/g;
+    let m;
+    while ((m = re.exec(text || ''))) {
+      const id = Number(m[1]);
+      if (Number.isFinite(id) && id >= 100000) out.push(id);
+    }
+    return out;
+  }
+
+  function installNetworkSniffer() {
+    if (state.networkSnifferInstalled) return;
+    state.networkSnifferInstalled = true;
+
+    try {
+      const originalFetch = window.fetch;
+      if (typeof originalFetch === 'function') {
+        window.fetch = function (...args) {
+          try {
+            const url = String(args?.[0]?.url || args?.[0] || '');
+            const ids = extractEaIdsFromText(url);
+            for (const id of ids) addRecentPlayerId(id, 'fetch');
+          } catch {}
+          return originalFetch.apply(this, args);
+        };
+      }
+    } catch (err) {
+      logLine(`player: fetch sniffer install failed ${String(err)}`);
+    }
+
+    try {
+      const originalOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+        try {
+          const ids = extractEaIdsFromText(String(url || ''));
+          for (const id of ids) addRecentPlayerId(id, 'xhr');
+        } catch {}
+        return originalOpen.call(this, method, url, ...rest);
+      };
+    } catch (err) {
+      logLine(`player: xhr sniffer install failed ${String(err)}`);
+    }
+
+    logLine('player: network sniffer installed');
+  }
+
+  function isLikelyPlayerDetailsView() {
+    const selectors = [
+      '.ut-item-details-view',
+      '.itemDetailView',
+      '.DetailPanel',
+      '.ut-player-bio-view',
+      '[class*="item-detail"]',
+      '[class*="player-detail"]',
+      '[class*="itemDetail"]',
+      '[class*="playerDetail"]',
+    ];
+    for (const selector of selectors) {
+      if (document.querySelector(selector)) return true;
+    }
+    const text = (document.body?.textContent || '').toLowerCase();
+    if (text.includes('skill moves') && text.includes('weak foot')) return true;
+    if (text.includes('player bio') || text.includes('player details')) return true;
+    return false;
+  }
+
   function findPlayerContext() {
     const linkSelectors = ['a[href*="fut.gg/players/"]', 'a[href*="/compare/"]', 'a[href*="/players/"]'];
 
@@ -296,7 +380,7 @@
       for (const link of links) {
         const href = link.getAttribute('href') || '';
         const parsed = parseGameEaIdFromText(href);
-        if (parsed && isVisible(link)) return parsed;
+        if (parsed && isVisible(link)) return { ...parsed, source: 'link' };
       }
     }
 
@@ -304,7 +388,31 @@
     for (const node of mediaNodes) {
       const src = node.getAttribute('src') || node.getAttribute('srcset') || '';
       const parsed = parseGameEaIdFromText(src);
-      if (parsed && isVisible(node)) return parsed;
+      if (parsed && isVisible(node)) return { ...parsed, source: 'media' };
+    }
+
+    const idNodes = document.querySelectorAll(
+      '[data-player-definition-id], [data-definition-id], [data-entity-id], .player-definition-id, [class*="definition-id"]'
+    );
+    for (const node of idNodes) {
+      const val =
+        node.getAttribute('data-player-definition-id') ||
+        node.getAttribute('data-definition-id') ||
+        node.getAttribute('data-entity-id') ||
+        node.textContent ||
+        '';
+      const ids = extractEaIdsFromText(val);
+      if (ids.length) return { game: DEFAULT_GAME, eaId: ids[0], source: 'dom-id' };
+    }
+
+    const detailRoot =
+      document.querySelector('.ut-item-details-view, .itemDetailView, .DetailPanel, [class*="itemDetail"], [class*="playerDetail"]') || document.body;
+    const idsFromText = extractEaIdsFromText(detailRoot?.textContent || '');
+    if (idsFromText.length) return { game: DEFAULT_GAME, eaId: idsFromText[0], source: 'text' };
+
+    const recent = state.recentPlayerIds[0];
+    if (recent && Date.now() - recent.ts < 30000) {
+      return { game: DEFAULT_GAME, eaId: recent.eaId, source: `recent-${recent.source}` };
     }
 
     return null;
@@ -459,13 +567,33 @@
     if (now - state.lastPlayerScanAt < 350) return;
     state.lastPlayerScanAt = now;
 
+    installNetworkSniffer();
+
     const ctx = findPlayerContext();
     if (!ctx || !Number.isFinite(ctx.eaId)) {
-      hidePlayerPanel();
+      if (isLikelyPlayerDetailsView()) {
+        const panel = ensurePlayerPanel();
+        if (panel) {
+          panel.dataset.kind = 'warn';
+          panel.textContent = 'FUT.GG Player\nID not detected yet\nOpen FUT.GG Logs and copy logs';
+        }
+        const debugKey = `missing:${state.recentPlayerIds[0]?.eaId || 'none'}`;
+        if (state.lastPlayerDebugKey !== debugKey) {
+          state.lastPlayerDebugKey = debugKey;
+          logLine(`player: context missing recent=${state.recentPlayerIds[0]?.eaId || 'none'} candidates=${state.recentPlayerIds.length}`);
+        }
+      } else {
+        hidePlayerPanel();
+      }
       return;
     }
 
     const key = `${ctx.game}-${ctx.eaId}`;
+    const debugKey = `ctx:${key}:${ctx.source || 'unknown'}`;
+    if (state.lastPlayerDebugKey !== debugKey) {
+      state.lastPlayerDebugKey = debugKey;
+      logLine(`player: context ${key} source=${ctx.source || 'unknown'}`);
+    }
     const cached = state.playerCache.get(key);
     if (cached) {
       const panel = ensurePlayerPanel();
@@ -911,6 +1039,10 @@
         color: #ff8c8c;
       }
       .${PLAYER_PANEL_CLASS}[data-kind="info"] {
+        border-color: rgba(255, 196, 0, 0.85);
+        color: #ffd25e;
+      }
+      .${PLAYER_PANEL_CLASS}[data-kind="warn"] {
         border-color: rgba(255, 196, 0, 0.85);
         color: #ffd25e;
       }

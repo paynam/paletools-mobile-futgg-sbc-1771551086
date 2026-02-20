@@ -15,6 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
+  const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
   const CARD_FLAG = 'ptFutggRatingBound';
 
   const state = {
@@ -22,7 +23,32 @@
     loaded: false,
     loading: null,
     lastScanAt: 0,
+    statusNode: null,
+    lastStatusKey: '',
   };
+
+  function ensureStatusNode() {
+    if (state.statusNode && document.body?.contains(state.statusNode)) return state.statusNode;
+    if (!document.body) return null;
+
+    const node = document.createElement('div');
+    node.className = STATUS_CLASS;
+    document.body.appendChild(node);
+    state.statusNode = node;
+    return node;
+  }
+
+  function setStatus(message, kind = 'info') {
+    const node = ensureStatusNode();
+    if (!node) return;
+
+    const key = `${kind}:${message}`;
+    if (state.lastStatusKey === key) return;
+    state.lastStatusKey = key;
+
+    node.textContent = `FUT.GG SBC: ${message}`;
+    node.dataset.kind = kind;
+  }
 
   function normalize(text) {
     return (text || '')
@@ -113,12 +139,19 @@
     if (state.loaded) return;
     if (state.loading) return state.loading;
 
+    setStatus('loading ratings...', 'info');
     state.loading = gmRequest(FUTGG_SBC_LIST_URL)
       .then((payload) => {
         state.byName = indexSbcs(payload);
         state.loaded = true;
+        if (state.byName.size) {
+          setStatus(`ready (${state.byName.size} SBCs)`, 'ok');
+        } else {
+          setStatus('loaded but no SBC data', 'warn');
+        }
       })
       .catch((err) => {
+        setStatus('failed to load ratings', 'error');
         console.warn('[PT FUT.GG Ratings] Failed to load SBC ratings', err);
       })
       .finally(() => {
@@ -185,17 +218,18 @@
   }
 
   function processCard(card) {
-    if (!card || card[CARD_FLAG]) return;
+    if (!card || card[CARD_FLAG]) return false;
 
     const titleNode = findTitleNode(card);
-    if (!titleNode) return;
+    if (!titleNode) return false;
 
     const titleText = titleNode.textContent.trim();
     const ratingLabel = lookupRatingByTitle(titleText);
-    if (!ratingLabel) return;
+    if (!ratingLabel) return false;
 
     injectChip(titleNode, ratingLabel);
     card[CARD_FLAG] = true;
+    return true;
   }
 
   function scanCards() {
@@ -212,7 +246,18 @@
     ];
 
     const cards = document.querySelectorAll(selectors.join(','));
-    for (const card of cards) processCard(card);
+    let matched = 0;
+
+    for (const card of cards) {
+      if (processCard(card)) matched += 1;
+    }
+
+    if (!state.loaded || !cards.length) return;
+    if (matched > 0) {
+      setStatus(`matched ${matched} on screen`, 'ok');
+    } else {
+      setStatus('loaded but no match on this screen', 'warn');
+    }
   }
 
   function ensureStyles() {
@@ -232,6 +277,33 @@
         font-weight: 700;
         white-space: nowrap;
         vertical-align: middle;
+      }
+      .${STATUS_CLASS} {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        z-index: 2147483647;
+        max-width: 70vw;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid #7f8b99;
+        background: rgba(22, 26, 33, 0.95);
+        color: #d7dde6;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.25;
+      }
+      .${STATUS_CLASS}[data-kind="ok"] {
+        border-color: rgba(78, 230, 235, 0.8);
+        color: #4ee6eb;
+      }
+      .${STATUS_CLASS}[data-kind="warn"] {
+        border-color: rgba(255, 196, 0, 0.85);
+        color: #ffd25e;
+      }
+      .${STATUS_CLASS}[data-kind="error"] {
+        border-color: rgba(255, 107, 107, 0.9);
+        color: #ff8c8c;
       }
     `;
 
@@ -258,9 +330,15 @@
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-      init().catch((err) => console.warn('[PT FUT.GG Ratings] init failed', err));
+      init().catch((err) => {
+        setStatus('init failed', 'error');
+        console.warn('[PT FUT.GG Ratings] init failed', err);
+      });
     });
   } else {
-    init().catch((err) => console.warn('[PT FUT.GG Ratings] init failed', err));
+    init().catch((err) => {
+      setStatus('init failed', 'error');
+      console.warn('[PT FUT.GG Ratings] init failed', err);
+    });
   }
 })();

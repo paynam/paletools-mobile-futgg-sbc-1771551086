@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-14';
+  const BUILD_ID = 'pt-futgg-20260221-15';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -66,6 +66,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     recentPlayerIds: [],
     networkSnifferInstalled: false,
     lastPlayerDebugKey: '',
+    lastControllerLogKey: '',
   };
 
   function logLine(message) {
@@ -502,25 +503,71 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return candidates.length ? candidates[0] : null;
   }
 
-  function resolvePlayerContextFromController() {
+  function pickPlayerNameFromObject(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    const first = String(obj.firstName || obj.cleanedFirstName || '').trim();
+    const last = String(obj.lastName || obj.cleanedLastName || '').trim();
+    const common = String(obj.commonName || obj.cleanedCommonName || '').trim();
+    const full =
+      [first, last].filter(Boolean).join(' ') ||
+      common ||
+      String(obj.name || obj.displayName || obj.playerName || '').trim();
+    return full || null;
+  }
+
+  function getDisplayedPlayerName(detailRoot) {
+    if (!detailRoot) return null;
+    const selectors = [
+      '.name',
+      '.title',
+      'h1',
+      'h2',
+      '[class*="playerName"]',
+      '[class*="itemName"]',
+      '[class*="bio"] .name',
+    ];
+    for (const selector of selectors) {
+      const node = detailRoot.querySelector(selector);
+      const txt = String(node?.textContent || '').trim();
+      if (txt.length >= 3) return txt;
+    }
+    return null;
+  }
+
+  function nameSimilarityScore(a, b) {
+    const ta = tokenSet(a || '');
+    const tb = tokenSet(b || '');
+    if (!ta.size || !tb.size) return 0;
+    let common = 0;
+    for (const t of ta) if (tb.has(t)) common += 1;
+    const denom = Math.max(ta.size, tb.size);
+    return denom ? common / denom : 0;
+  }
+
+  function getControllerRoots() {
     const roots = [];
     try {
       const app = typeof getAppMain === 'function' ? getAppMain() : null;
       if (app) {
-        roots.push(app);
+        roots.push({ node: app, source: 'app' });
         try {
           const rootVc = typeof app.getRootViewController === 'function' ? app.getRootViewController() : null;
-          if (rootVc) roots.push(rootVc);
+          if (rootVc) roots.push({ node: rootVc, source: 'rootVc' });
           const presented = typeof rootVc?.getPresentedViewController === 'function' ? rootVc.getPresentedViewController() : null;
-          if (presented) roots.push(presented);
+          if (presented) roots.push({ node: presented, source: 'rootVc.presented' });
         } catch {}
         try {
           const current = typeof app.getCurrentController === 'function' ? app.getCurrentController() : null;
-          if (current) roots.push(current);
+          if (current) roots.push({ node: current, source: 'app.currentController' });
         } catch {}
       }
     } catch {}
+    return roots;
+  }
 
+  function resolvePlayerContextFromController(detailRoot) {
+    const roots = getControllerRoots();
+    const displayedName = getDisplayedPlayerName(detailRoot);
     const itemPaths = [
       ['presentedItem'],
       ['_presentedItem'],
@@ -540,49 +587,123 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       ['_viewmodel', '_itemData'],
     ];
 
-    for (const root of roots) {
-      if (!root || typeof root !== 'object') continue;
+    const candidates = [];
 
+    for (const rootWrap of roots) {
+      const root = rootWrap?.node;
+      if (!root || typeof root !== 'object') continue;
       for (const path of itemPaths) {
         const item = getValueAtPath(root, path);
         const eaId = pickEaIdFromObject(item);
-        if (eaId) return { game: DEFAULT_GAME, eaId, source: `controller:${path.join('.')}` };
+        if (!eaId) continue;
+        const playerName = pickPlayerNameFromObject(item);
+        let score = 100;
+        if (playerName) score += 20;
+        if (displayedName && playerName) score += Math.round(100 * nameSimilarityScore(displayedName, playerName));
+        candidates.push({
+          game: DEFAULT_GAME,
+          eaId,
+          playerName: playerName || null,
+          score,
+          source: `controller:${rootWrap.source}.${path.join('.')}`,
+        });
       }
 
       const eaIdDirect = pickEaIdFromObject(root);
-      if (eaIdDirect) return { game: DEFAULT_GAME, eaId: eaIdDirect, source: 'controller:direct' };
+      if (eaIdDirect) {
+        const directName = pickPlayerNameFromObject(root);
+        let score = 60;
+        if (directName) score += 20;
+        if (displayedName && directName) score += Math.round(100 * nameSimilarityScore(displayedName, directName));
+        candidates.push({
+          game: DEFAULT_GAME,
+          eaId: eaIdDirect,
+          playerName: directName || null,
+          score,
+          source: `controller:${rootWrap.source}.direct`,
+        });
+      }
+
+      const seen = new WeakSet();
+      const queue = [{ node: root, path: rootWrap.source, depth: 0 }];
+      let visited = 0;
+      const MAX_VISIT = 800;
+      const MAX_DEPTH = 5;
+      while (queue.length && visited < MAX_VISIT) {
+        const cur = queue.shift();
+        const node = cur?.node;
+        const depth = cur?.depth || 0;
+        if (!node || typeof node !== 'object') continue;
+        if (seen.has(node)) continue;
+        seen.add(node);
+        visited += 1;
+
+        const eaId = pickEaIdFromObject(node);
+        if (eaId) {
+          const nodeName = pickPlayerNameFromObject(node);
+          let score = 30;
+          if (nodeName) score += 20;
+          if (displayedName && nodeName) score += Math.round(100 * nameSimilarityScore(displayedName, nodeName));
+          if (Number(node?.rating) > 0) score += 5;
+          if (Number(node?.skillMoves) > 0) score += 5;
+          if (Number(node?.weakFoot) > 0) score += 5;
+          candidates.push({
+            game: DEFAULT_GAME,
+            eaId,
+            playerName: nodeName || null,
+            score,
+            source: `controller:deep.${cur.path}`,
+          });
+        }
+
+        if (depth >= MAX_DEPTH) continue;
+        const keys = Object.keys(node);
+        for (const key of keys) {
+          if (!key) continue;
+          if (key.startsWith('__')) continue;
+          const val = node[key];
+          if (!val || typeof val !== 'object') continue;
+          if (Array.isArray(val)) {
+            const lim = Math.min(val.length, 8);
+            for (let i = 0; i < lim; i++) {
+              const child = val[i];
+              if (child && typeof child === 'object') queue.push({ node: child, path: `${cur.path}.${key}[${i}]`, depth: depth + 1 });
+            }
+          } else {
+            queue.push({ node: val, path: `${cur.path}.${key}`, depth: depth + 1 });
+          }
+        }
+      }
     }
 
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+    const logKey = `${best.game}-${best.eaId}:${best.source}:${best.score}:${best.playerName || ''}:${candidates.length}`;
+    if (state.lastControllerLogKey !== logKey) {
+      state.lastControllerLogKey = logKey;
+      logLine(
+        `player: controller candidates=${candidates.length} best=${best.game}-${best.eaId} score=${best.score} source=${
+          best.source
+        } name=${best.playerName || 'n/a'}`
+      );
+    }
+    return best;
+  }
+
+  function resolvePlayerContextFromRecent(detailRoot) {
+    if (!Array.isArray(state.recentPlayerIds) || !state.recentPlayerIds.length) return null;
+    const displayedName = getDisplayedPlayerName(detailRoot);
+    if (!displayedName) return null;
+    const recent = state.recentPlayerIds.slice(0, 8);
+    if (recent.length === 1) {
+      return { game: DEFAULT_GAME, eaId: recent[0].eaId, source: 'recent-single' };
+    }
     return null;
   }
 
-  function isLikelyPlayerDetailsView() {
-    const selectors = [
-      '.ut-item-details-view',
-      '.itemDetailView',
-      '.DetailPanel',
-      '.ut-player-bio-view',
-      '[class*="item-detail"]',
-      '[class*="player-detail"]',
-      '[class*="itemDetail"]',
-      '[class*="playerDetail"]',
-    ];
-    for (const selector of selectors) {
-      if (document.querySelector(selector)) return true;
-    }
-    const text = (document.body?.textContent || '').toLowerCase();
-    if (text.includes('find lowest market price') || text.includes('copy player name')) return true;
-    if (text.includes('skill moves') && text.includes('weak foot')) return true;
-    if (text.includes('player bio') || text.includes('player details')) return true;
-    return false;
-  }
-
-  function findPlayerContext() {
-    const detailRoot = document.querySelector(
-      '.ut-item-details-view, .itemDetailView, .DetailPanel, .ut-player-bio-view, [class*="itemDetail"], [class*="playerDetail"]'
-    );
+  function resolvePlayerContextFromDom(detailRoot) {
     if (!detailRoot) return null;
-
     const linkSelectors = ['a[href*="fut.gg/players/"]', 'a[href*="/compare/"]', 'a[href*="/players/"]'];
 
     for (const selector of linkSelectors) {
@@ -615,8 +736,44 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (ids.length) return { game: DEFAULT_GAME, eaId: ids[0], source: 'dom-id' };
     }
 
-    const fromController = resolvePlayerContextFromController();
+    return null;
+  }
+
+  function isLikelyPlayerDetailsView() {
+    const selectors = [
+      '.ut-item-details-view',
+      '.itemDetailView',
+      '.DetailPanel',
+      '.ut-player-bio-view',
+      '[class*="item-detail"]',
+      '[class*="player-detail"]',
+      '[class*="itemDetail"]',
+      '[class*="playerDetail"]',
+    ];
+    for (const selector of selectors) {
+      if (document.querySelector(selector)) return true;
+    }
+    const text = (document.body?.textContent || '').toLowerCase();
+    if (text.includes('find lowest market price') || text.includes('copy player name')) return true;
+    if (text.includes('skill moves') && text.includes('weak foot')) return true;
+    if (text.includes('player bio') || text.includes('player details')) return true;
+    return false;
+  }
+
+  function findPlayerContext() {
+    const detailRoot = document.querySelector(
+      '.ut-item-details-view, .itemDetailView, .DetailPanel, .ut-player-bio-view, [class*="itemDetail"], [class*="playerDetail"]'
+    );
+    if (!detailRoot) return null;
+
+    const fromController = resolvePlayerContextFromController(detailRoot);
     if (fromController) return fromController;
+
+    const fromDom = resolvePlayerContextFromDom(detailRoot);
+    if (fromDom) return fromDom;
+
+    const fromRecent = resolvePlayerContextFromRecent(detailRoot);
+    if (fromRecent) return fromRecent;
 
     return null;
   }

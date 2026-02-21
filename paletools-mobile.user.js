@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-19';
+  const BUILD_ID = 'pt-futgg-20260221-20';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -443,6 +443,38 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return out;
   }
 
+  function extractEaIdsFromJsonLike(value, max = 12) {
+    const out = [];
+    const seen = new WeakSet();
+    const queue = [value];
+    while (queue.length && out.length < max) {
+      const cur = queue.shift();
+      if (!cur || typeof cur !== 'object') continue;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+
+      const id = pickEaIdFromObject(cur);
+      if (id && !out.includes(id)) out.push(id);
+
+      if (Array.isArray(cur)) {
+        const lim = Math.min(cur.length, 20);
+        for (let i = 0; i < lim; i++) {
+          const child = cur[i];
+          if (child && typeof child === 'object') queue.push(child);
+        }
+        continue;
+      }
+
+      const keys = Object.keys(cur);
+      for (const key of keys) {
+        if (!key || key.startsWith('__')) continue;
+        const child = cur[key];
+        if (child && typeof child === 'object') queue.push(child);
+      }
+    }
+    return out;
+  }
+
   function installNetworkSniffer() {
     if (state.networkSnifferInstalled) return;
     state.networkSnifferInstalled = true;
@@ -451,12 +483,33 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       const originalFetch = window.fetch;
       if (typeof originalFetch === 'function') {
         window.fetch = function (...args) {
+          let url = '';
           try {
-            const url = String(args?.[0]?.url || args?.[0] || '');
+            url = String(args?.[0]?.url || args?.[0] || '');
             const ids = extractEaIdsFromText(url);
             for (const id of ids) addRecentPlayerId(id, 'fetch');
           } catch {}
-          return originalFetch.apply(this, args);
+          const p = originalFetch.apply(this, args);
+          try {
+            Promise.resolve(p)
+              .then((resp) => {
+                try {
+                  if (!resp || typeof resp.clone !== 'function') return;
+                  const ct = String(resp.headers?.get?.('content-type') || '');
+                  if (!/json/i.test(ct)) return;
+                  return resp
+                    .clone()
+                    .json()
+                    .then((body) => {
+                      const ids = extractEaIdsFromJsonLike(body);
+                      for (const id of ids) addRecentPlayerId(id, 'fetch-body');
+                    })
+                    .catch(() => {});
+                } catch {}
+              })
+              .catch(() => {});
+          } catch {}
+          return p;
         };
       }
     } catch (err) {
@@ -465,12 +518,30 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     try {
       const originalOpen = XMLHttpRequest.prototype.open;
+      const originalSend = XMLHttpRequest.prototype.send;
       XMLHttpRequest.prototype.open = function (method, url, ...rest) {
         try {
+          this.__ptFutggUrl = String(url || '');
           const ids = extractEaIdsFromText(String(url || ''));
           for (const id of ids) addRecentPlayerId(id, 'xhr');
         } catch {}
         return originalOpen.call(this, method, url, ...rest);
+      };
+      XMLHttpRequest.prototype.send = function (...args) {
+        try {
+          this.addEventListener('load', () => {
+            try {
+              const ct = String(this.getResponseHeader?.('content-type') || '');
+              if (!/json/i.test(ct)) return;
+              const text = String(this.responseText || '');
+              if (!text || text.length > 500000) return;
+              const body = JSON.parse(text);
+              const ids = extractEaIdsFromJsonLike(body);
+              for (const id of ids) addRecentPlayerId(id, 'xhr-body');
+            } catch {}
+          });
+        } catch {}
+        return originalSend.call(this, ...args);
       };
     } catch (err) {
       logLine(`player: xhr sniffer install failed ${String(err)}`);
@@ -779,11 +850,25 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   function resolvePlayerContextFromRecent(detailRoot) {
     if (!Array.isArray(state.recentPlayerIds) || !state.recentPlayerIds.length) return null;
-    const displayedName = getDisplayedPlayerName(detailRoot);
-    if (!displayedName) return null;
-    const recent = state.recentPlayerIds.slice(0, 8);
-    if (recent.length === 1) {
-      return { game: DEFAULT_GAME, eaId: recent[0].eaId, source: 'recent-single' };
+    const now = Date.now();
+    const fresh = state.recentPlayerIds.filter((x) => now - Number(x.ts || 0) < 15000).slice(0, 12);
+    if (!fresh.length) return null;
+
+    const score = (row) => {
+      const src = String(row?.source || '');
+      let s = 0;
+      if (src.includes('body')) s += 100;
+      if (src.includes('fetch')) s += 20;
+      if (src.includes('xhr')) s += 15;
+      const age = now - Number(row?.ts || now);
+      s += Math.max(0, 10000 - age) / 200;
+      return s;
+    };
+
+    fresh.sort((a, b) => score(b) - score(a));
+    const best = fresh[0];
+    if (Number(best?.eaId) >= 10000) {
+      return { game: DEFAULT_GAME, eaId: best.eaId, source: `recent:${best.source}` };
     }
     return null;
   }

@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-16';
+  const BUILD_ID = 'pt-futgg-20260221-17';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -67,6 +67,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     networkSnifferInstalled: false,
     lastPlayerDebugKey: '',
     lastControllerLogKey: '',
+    lastRejectLogKey: '',
   };
 
   function logLine(message) {
@@ -721,6 +722,106 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return null;
   }
 
+  function extractInternalObjectsFromNode(node) {
+    if (!node || typeof node !== 'object') return [];
+    const out = [];
+    const keys = Object.getOwnPropertyNames(node);
+    for (const key of keys) {
+      if (!key) continue;
+      if (
+        key.startsWith('__reactProps$') ||
+        key.startsWith('__reactFiber$') ||
+        key.startsWith('__reactContainer$') ||
+        key === '_viewmodel' ||
+        key === '_currentController' ||
+        key === 'controller' ||
+        key === 'viewmodel'
+      ) {
+        const val = node[key];
+        if (val && typeof val === 'object') out.push({ obj: val, key });
+      }
+    }
+    return out;
+  }
+
+  function resolvePlayerContextFromUiInternals(detailRoot, hostInfo) {
+    const displayedName = getDisplayedPlayerName(detailRoot);
+    const seedNodes = [
+      { node: detailRoot, label: 'detailRoot' },
+      { node: hostInfo?.host, label: 'menuHost' },
+      { node: hostInfo?.templateNode, label: 'menuTemplate' },
+    ].filter((x) => x.node);
+
+    const badPathRe = /(hubmessages|message|tile|store|pack|objective|transfer|market|sbc|navigation|tabbar|news|banner|inbox)/i;
+    const goodPathRe = /(item|player|detail|bio|viewmodel|controller|entity|presented)/i;
+    const candidates = [];
+
+    for (const seed of seedNodes) {
+      const internals = extractInternalObjectsFromNode(seed.node);
+      for (const internal of internals) {
+        const seen = new WeakSet();
+        const queue = [{ node: internal.obj, path: `${seed.label}.${internal.key}`, depth: 0 }];
+        let visited = 0;
+        const MAX_VISIT = 500;
+        const MAX_DEPTH = 5;
+        while (queue.length && visited < MAX_VISIT) {
+          const cur = queue.shift();
+          const obj = cur?.node;
+          const depth = cur?.depth || 0;
+          if (!obj || typeof obj !== 'object') continue;
+          if (seen.has(obj)) continue;
+          seen.add(obj);
+          visited += 1;
+
+          const eaId = pickEaIdFromObject(obj);
+          if (eaId) {
+            const playerName = pickPlayerNameFromObject(obj);
+            let score = 30;
+            if (goodPathRe.test(cur.path)) score += 40;
+            if (badPathRe.test(cur.path)) score -= 60;
+            if (playerName) score += 20;
+            if (displayedName && playerName) score += Math.round(100 * nameSimilarityScore(displayedName, playerName));
+            candidates.push({
+              game: DEFAULT_GAME,
+              eaId,
+              playerName: playerName || null,
+              score,
+              source: `ui:${cur.path}`,
+            });
+          }
+
+          if (depth >= MAX_DEPTH) continue;
+          for (const key of Object.keys(obj)) {
+            if (!key || key.startsWith('__')) continue;
+            const val = obj[key];
+            if (!val || typeof val !== 'object') continue;
+            if (Array.isArray(val)) {
+              const lim = Math.min(val.length, 6);
+              for (let i = 0; i < lim; i++) {
+                const child = val[i];
+                if (child && typeof child === 'object') queue.push({ node: child, path: `${cur.path}.${key}[${i}]`, depth: depth + 1 });
+              }
+            } else {
+              queue.push({ node: val, path: `${cur.path}.${key}`, depth: depth + 1 });
+            }
+          }
+        }
+      }
+    }
+
+    if (!candidates.length) return null;
+    const filtered = candidates.filter((c) => {
+      if (c.score >= 90) return true;
+      const sim = displayedName && c.playerName ? nameSimilarityScore(displayedName, c.playerName) : 0;
+      return sim >= 0.6;
+    });
+    if (!filtered.length) return null;
+    filtered.sort((a, b) => b.score - a.score);
+    const best = filtered[0];
+    logLine(`player: ui candidates=${filtered.length}/${candidates.length} best=${best.game}-${best.eaId} source=${best.source}`);
+    return best;
+  }
+
   function resolvePlayerContextFromDom(detailRoot) {
     if (!detailRoot) return null;
     const linkSelectors = ['a[href*="fut.gg/players/"]', 'a[href*="/compare/"]', 'a[href*="/players/"]'];
@@ -779,7 +880,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return false;
   }
 
-  function findPlayerContext() {
+  function findPlayerContext(hostInfo) {
     const detailRoot = document.querySelector(
       '.ut-item-details-view, .itemDetailView, .DetailPanel, .ut-player-bio-view, [class*="itemDetail"], [class*="playerDetail"]'
     );
@@ -787,6 +888,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     const fromController = resolvePlayerContextFromController(detailRoot);
     if (fromController) return fromController;
+
+    const fromUi = resolvePlayerContextFromUiInternals(detailRoot, hostInfo);
+    if (fromUi) return fromUi;
 
     const fromDom = resolvePlayerContextFromDom(detailRoot);
     if (fromDom) return fromDom;
@@ -1012,7 +1116,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       menuItem.textContent = 'FUT.GG: loading...';
     }
 
-    const ctx = findPlayerContext();
+    const ctx = findPlayerContext(hostInfo);
     if (!ctx || !Number.isFinite(ctx.eaId)) {
       if (menuItem) {
         menuItem.dataset.kind = 'warn';

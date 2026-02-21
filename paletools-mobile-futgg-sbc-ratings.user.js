@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-24';
+  const BUILD_ID = 'pt-futgg-20260221-25';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -41,6 +41,7 @@
   const TRADER_STORAGE_KEY = 'pt_futgg_auto_trader_v1';
   const DEFAULT_TRADER_CONFIG = {
     enabled: false,
+    searchText: '',
     definitionId: '',
     maxBuyNow: '0',
     minBuyNow: '0',
@@ -74,6 +75,7 @@
     traderPanel: null,
     traderFields: null,
     traderStatus: null,
+    traderSearchResults: null,
     traderConfig: null,
     traderRuntime: null,
     playerMenuNode: null,
@@ -267,6 +269,7 @@
     const fields = state.traderFields;
     if (!fields) return getTraderConfig();
     return normalizeTraderConfig({
+      searchText: fields.searchText?.value || '',
       definitionId: fields.definitionId?.value || '',
       maxBuyNow: fields.maxBuyNow?.value || '0',
       minBuyNow: fields.minBuyNow?.value || '0',
@@ -295,6 +298,34 @@
       if (!(key in config)) continue;
       fields[key].value = String(config[key] ?? '');
     }
+  }
+
+  function getItemDisplayName(item) {
+    const candidates = [
+      item?.name,
+      item?.fullName,
+      item?.commonName,
+      item?.lastName,
+      item?.itemData?.name,
+      item?.itemData?.fullName,
+      item?.itemData?.commonName,
+      item?.itemData?.lastName,
+      item?._staticData?.name,
+      item?._staticData?.commonName,
+    ];
+    const name = candidates.find((x) => typeof x === 'string' && x.trim());
+    return name ? name.trim() : 'Unknown';
+  }
+
+  function getItemRating(item) {
+    const candidates = [
+      item?.rating,
+      item?.itemData?.rating,
+      item?._staticData?.rating,
+      item?.overall,
+      item?.ovr,
+    ].map((x) => Number(x));
+    return candidates.find((x) => Number.isFinite(x) && x > 0) || null;
   }
 
   function getTradeId(item) {
@@ -334,6 +365,108 @@
       } catch {}
     }
     return [];
+  }
+
+  function getSearchService() {
+    const svc = window.services || window.UTAServices || {};
+    return svc.Item || svc.item || svc.Search || svc.search || null;
+  }
+
+  async function searchPlayersByName(query) {
+    const service = getSearchService();
+    if (!service) throw new Error('search service unavailable');
+    const method = findMethodByNames(service, ['searchConceptItems', 'searchPlayers', 'searchPlayerItems']);
+    if (!method) throw new Error('searchConceptItems method not found');
+
+    const q = String(query || '').trim();
+    if (!q) return [];
+
+    const baseCriteria = {
+      type: 'player',
+      level: 'gold',
+      searchText: q,
+      text: q,
+      name: q,
+    };
+    const attempts = [
+      [baseCriteria, 1, 20],
+      [baseCriteria, 20],
+      [baseCriteria],
+      [q],
+      ['player', q],
+    ];
+
+    let lastErr = null;
+    for (const args of attempts) {
+      try {
+        logLine(`trader: player search via ${method} q="${q}" args=${args.length}`);
+        const result = await callServiceMethod(service, method, args, 20000);
+        const items = extractItemsFromResult(result);
+        if (items.length) return items;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (lastErr) throw lastErr;
+    return [];
+  }
+
+  function renderTraderSearchResults(items) {
+    const host = state.traderSearchResults;
+    if (!host) return;
+    host.innerHTML = '';
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.className = 'pt-futgg-trader-search-empty';
+      empty.textContent = 'No players found.';
+      host.appendChild(empty);
+      return;
+    }
+
+    const unique = new Set();
+    const limited = [];
+    for (const item of list) {
+      const defId = getItemDefinitionId(item);
+      if (!defId || unique.has(defId)) continue;
+      unique.add(defId);
+      limited.push(item);
+      if (limited.length >= 20) break;
+    }
+
+    for (const item of limited) {
+      const defId = getItemDefinitionId(item);
+      const name = getItemDisplayName(item);
+      const rating = getItemRating(item);
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'pt-futgg-trader-search-row';
+      row.textContent = `${name}${rating ? ` (${rating})` : ''} • ${defId}`;
+      row.addEventListener('click', () => {
+        if (state.traderFields?.definitionId) state.traderFields.definitionId.value = String(defId);
+        if (state.traderFields?.searchText) state.traderFields.searchText.value = name;
+        traderSetStatus(`Selected ${name} (${defId})`, 'ok');
+      });
+      host.appendChild(row);
+    }
+  }
+
+  async function onTraderSearchClick() {
+    const q = String(state.traderFields?.searchText?.value || '').trim();
+    if (!q) {
+      traderSetStatus('Enter player name first', 'warn');
+      return;
+    }
+    traderSetStatus(`Searching "${q}"...`, 'info');
+    try {
+      const items = await searchPlayersByName(q);
+      renderTraderSearchResults(items);
+      traderSetStatus(`Found ${items.length} result(s) for "${q}"`, items.length ? 'ok' : 'warn');
+    } catch (err) {
+      renderTraderSearchResults([]);
+      traderSetStatus(`Search failed: ${String(err)}`, 'error');
+      logLine(`trader: player search failed ${String(err)}`);
+    }
   }
 
   function getCurrentCoins() {
@@ -774,6 +907,7 @@
     const status = panel.querySelector('.pt-futgg-trader-status');
 
     const fieldDefs = [
+      ['Player Name', 'searchText', 'text', 'e.g. mbappe'],
       ['Player Definition ID', 'definitionId', 'number', 'e.g. 20801'],
       ['Min Buy Now', 'minBuyNow', 'number', '0'],
       ['Max Buy Now', 'maxBuyNow', 'number', '0'],
@@ -800,6 +934,11 @@
       fields[key] = field.input;
     }
 
+    const searchBtn = document.createElement('button');
+    searchBtn.type = 'button';
+    searchBtn.textContent = 'Find Player';
+    searchBtn.addEventListener('click', onTraderSearchClick);
+
     const startBtn = document.createElement('button');
     startBtn.type = 'button';
     startBtn.textContent = 'Start';
@@ -820,15 +959,21 @@
     closeBtn.textContent = 'Close';
     closeBtn.addEventListener('click', () => panel.classList.remove('open'));
 
+    actions.appendChild(searchBtn);
     actions.appendChild(startBtn);
     actions.appendChild(stopBtn);
     actions.appendChild(saveBtn);
     actions.appendChild(closeBtn);
 
+    const results = document.createElement('div');
+    results.className = 'pt-futgg-trader-search-results';
+    panel.insertBefore(results, actions);
+
     document.body.appendChild(panel);
     state.traderPanel = panel;
     state.traderFields = fields;
     state.traderStatus = status;
+    state.traderSearchResults = results;
 
     fillTraderFields(getTraderConfig());
   }
@@ -837,6 +982,7 @@
     ensureTraderPanel();
     if (!state.traderPanel) return;
     fillTraderFields(getTraderConfig());
+    renderTraderSearchResults([]);
     state.traderPanel.classList.add('open');
   }
 
@@ -2629,6 +2775,34 @@
         gap: 8px;
         margin-top: 10px;
         flex-wrap: wrap;
+      }
+      .pt-futgg-trader-search-results {
+        margin-top: 10px;
+        margin-bottom: 4px;
+        border: 1px solid rgba(78, 230, 235, 0.35);
+        border-radius: 6px;
+        overflow: auto;
+        max-height: 180px;
+        background: rgba(15, 21, 27, 0.9);
+      }
+      .pt-futgg-trader-search-row {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        border-bottom: 1px solid rgba(78, 230, 235, 0.18);
+        background: transparent;
+        color: #d7dde6;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+      .pt-futgg-trader-search-row:last-child {
+        border-bottom: 0;
+      }
+      .pt-futgg-trader-search-empty {
+        padding: 8px 10px;
+        color: #9fb4c8;
+        font-size: 12px;
       }
       .pt-futgg-trader-actions button {
         padding: 8px 10px;

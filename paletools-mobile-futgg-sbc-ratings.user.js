@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-22';
+  const BUILD_ID = 'pt-futgg-20260221-24';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -29,13 +29,36 @@
   const STATUS_CLASS = 'pt-futgg-sbc-rating-status';
   const PLAYER_MENU_ITEM_CLASS = 'pt-futgg-player-menu-item';
   const SETTINGS_LOG_ITEM_CLASS = 'pt-futgg-settings-log-item';
+  const SETTINGS_TRADER_ITEM_CLASS = 'pt-futgg-settings-trader-item';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
+  const TRADER_PANEL_CLASS = 'pt-futgg-trader-panel';
   const DROPDOWN_ITEM_CLASS = 'pt-futgg-sort-item';
   const SORT_DESC_VALUE = '__pt_futgg_desc__';
   const SORT_ASC_VALUE = '__pt_futgg_asc__';
   const CARD_FLAG = 'ptFutggRatingBound';
   const PLAYER_CONTENT_TYPE = 27;
   const DEFAULT_GAME = '26';
+  const TRADER_STORAGE_KEY = 'pt_futgg_auto_trader_v1';
+  const DEFAULT_TRADER_CONFIG = {
+    enabled: false,
+    definitionId: '',
+    maxBuyNow: '0',
+    minBuyNow: '0',
+    minBid: '0',
+    maxBid: '0',
+    startPrice: '0',
+    listBuyNow: '0',
+    duration: '3600',
+    pageSize: '16',
+    minSleepMs: '2200',
+    maxSleepMs: '4800',
+    buyCooldownMinMs: '900',
+    buyCooldownMaxMs: '1600',
+    minCoinsReserve: '50000',
+    maxOwnedCopies: '5',
+    maxBuysPerRun: '0',
+    extraCriteriaJson: '',
+  };
 
   const state = {
     byName: new Map(),
@@ -48,6 +71,11 @@
     logLines: [],
     logPanel: null,
     logPre: null,
+    traderPanel: null,
+    traderFields: null,
+    traderStatus: null,
+    traderConfig: null,
+    traderRuntime: null,
     playerMenuNode: null,
     playerCache: new Map(),
     chemStyleNamesByGame: new Map(),
@@ -117,6 +145,699 @@
     if (!state.logPanel) return;
     state.logPanel.classList.add('open');
     if (state.logPre) state.logPre.textContent = state.logLines.join('\n');
+  }
+
+  function parseNumber(raw, fallback = 0) {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function normalizeTraderConfig(input) {
+    const out = { ...DEFAULT_TRADER_CONFIG, ...(input || {}) };
+    for (const key of Object.keys(DEFAULT_TRADER_CONFIG)) out[key] = String(out[key] ?? DEFAULT_TRADER_CONFIG[key]);
+    return out;
+  }
+
+  function getTraderConfig() {
+    if (state.traderConfig) return state.traderConfig;
+    try {
+      const raw = localStorage.getItem(TRADER_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      state.traderConfig = normalizeTraderConfig(parsed);
+    } catch {
+      state.traderConfig = normalizeTraderConfig(null);
+    }
+    return state.traderConfig;
+  }
+
+  function saveTraderConfig(config) {
+    state.traderConfig = normalizeTraderConfig(config);
+    try {
+      localStorage.setItem(TRADER_STORAGE_KEY, JSON.stringify(state.traderConfig));
+      logLine('trader: config saved');
+    } catch (err) {
+      logLine(`trader: config save failed ${String(err)}`);
+    }
+  }
+
+  function traderSetStatus(text, kind = 'info') {
+    if (!state.traderStatus) return;
+    state.traderStatus.dataset.kind = kind;
+    state.traderStatus.textContent = text;
+  }
+
+  function randomInt(min, max) {
+    const lo = Math.floor(Math.max(0, min));
+    const hi = Math.floor(Math.max(lo, max));
+    return lo + Math.floor(Math.random() * (hi - lo + 1));
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function getItemService() {
+    const svc = window.services || window.UTAServices || null;
+    const item = svc?.Item || svc?.item || null;
+    return item || null;
+  }
+
+  function findMethodByNames(obj, names) {
+    if (!obj || typeof obj !== 'object') return null;
+    for (const name of names) {
+      if (typeof obj[name] === 'function') return name;
+    }
+    return null;
+  }
+
+  function callServiceMethod(obj, methodName, args = [], timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+      if (!obj || typeof obj[methodName] !== 'function') {
+        reject(new Error(`Method missing: ${methodName}`));
+        return;
+      }
+
+      let done = false;
+      const finish = (ok, value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (ok) resolve(value);
+        else reject(value instanceof Error ? value : new Error(String(value || 'Unknown error')));
+      };
+      const onSuccess = (value) => finish(true, value);
+      const onError = (err) => finish(false, err || new Error('Service error'));
+
+      const timer = setTimeout(() => finish(false, new Error(`${methodName} timed out after ${timeoutMs}ms`)), timeoutMs);
+
+      try {
+        let ret;
+        try {
+          ret = obj[methodName](...args, onSuccess, onError);
+        } catch {
+          try {
+            ret = obj[methodName](...args, onSuccess);
+          } catch {
+            ret = obj[methodName](...args);
+          }
+        }
+
+        if (ret && typeof ret.then === 'function') {
+          ret.then(onSuccess).catch(onError);
+          return;
+        }
+        if (ret && typeof ret.toPromise === 'function') {
+          ret.toPromise().then(onSuccess).catch(onError);
+          return;
+        }
+        if (ret && typeof ret.observe === 'function') {
+          try {
+            ret.observe(null, onSuccess, onError);
+            return;
+          } catch {}
+        }
+        if (ret !== undefined) onSuccess(ret);
+      } catch (err) {
+        onError(err);
+      }
+    });
+  }
+
+  function readTraderFields() {
+    const fields = state.traderFields;
+    if (!fields) return getTraderConfig();
+    return normalizeTraderConfig({
+      definitionId: fields.definitionId?.value || '',
+      maxBuyNow: fields.maxBuyNow?.value || '0',
+      minBuyNow: fields.minBuyNow?.value || '0',
+      minBid: fields.minBid?.value || '0',
+      maxBid: fields.maxBid?.value || '0',
+      startPrice: fields.startPrice?.value || '0',
+      listBuyNow: fields.listBuyNow?.value || '0',
+      duration: fields.duration?.value || '3600',
+      pageSize: fields.pageSize?.value || '16',
+      minSleepMs: fields.minSleepMs?.value || '2200',
+      maxSleepMs: fields.maxSleepMs?.value || '4800',
+      buyCooldownMinMs: fields.buyCooldownMinMs?.value || '900',
+      buyCooldownMaxMs: fields.buyCooldownMaxMs?.value || '1600',
+      minCoinsReserve: fields.minCoinsReserve?.value || '50000',
+      maxOwnedCopies: fields.maxOwnedCopies?.value || '5',
+      maxBuysPerRun: fields.maxBuysPerRun?.value || '0',
+      extraCriteriaJson: fields.extraCriteriaJson?.value || '',
+    });
+  }
+
+  function fillTraderFields(config) {
+    const fields = state.traderFields;
+    if (!fields) return;
+    for (const key of Object.keys(fields)) {
+      if (!fields[key]) continue;
+      if (!(key in config)) continue;
+      fields[key].value = String(config[key] ?? '');
+    }
+  }
+
+  function getTradeId(item) {
+    const candidates = [item?.tradeId, item?.id, item?.auctionInfo?.tradeId, item?.auctionData?.tradeId].map((x) => Number(x));
+    return candidates.find((x) => Number.isFinite(x) && x > 0) || null;
+  }
+
+  function getItemDefinitionId(item) {
+    const candidates = [
+      item?.definitionId,
+      item?.resourceId,
+      item?.assetId,
+      item?.itemData?.definitionId,
+      item?.itemData?.resourceId,
+      item?.itemData?.assetId,
+      item?._staticData?.id,
+    ].map((x) => Number(x));
+    return candidates.find((x) => Number.isFinite(x) && x > 0) || null;
+  }
+
+  function getItemBuyNow(item) {
+    const candidates = [item?.buyNowPrice, item?.auctionInfo?.buyNowPrice, item?.auctionData?.buyNowPrice, item?.currentBid];
+    const n = Number(candidates.find((x) => Number.isFinite(Number(x))));
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function extractItemsFromResult(result) {
+    if (Array.isArray(result)) return result;
+    if (Array.isArray(result?.items)) return result.items;
+    if (Array.isArray(result?.data?.items)) return result.data.items;
+    if (Array.isArray(result?.auctionInfo)) return result.auctionInfo;
+    if (Array.isArray(result?.auctionData)) return result.auctionData;
+    if (typeof result?.getItems === 'function') {
+      try {
+        const items = result.getItems();
+        if (Array.isArray(items)) return items;
+      } catch {}
+    }
+    return [];
+  }
+
+  function getCurrentCoins() {
+    const svc = window.services || window.UTAServices || {};
+    const userSvc = svc.User || svc.user || null;
+    const candidates = [];
+
+    if (userSvc) {
+      try {
+        if (typeof userSvc.getUser === 'function') candidates.push(userSvc.getUser());
+      } catch {}
+      candidates.push(userSvc.user, userSvc._user, userSvc.userInfo, userSvc._userInfo);
+    }
+    candidates.push(window.user, window.userInfo, window.UTGameData?.user, window.UTGameData?.userInfo);
+
+    const coinKeys = ['coins', '_coins', 'credits', '_credits', 'coinBalance', 'balance'];
+    for (const obj of candidates) {
+      if (!obj || typeof obj !== 'object') continue;
+      for (const key of coinKeys) {
+        const n = Number(obj[key]);
+        if (Number.isFinite(n) && n >= 0) return n;
+      }
+      const wallet = obj.wallet || obj.currencies;
+      if (wallet && typeof wallet === 'object') {
+        for (const key of coinKeys) {
+          const n = Number(wallet[key]);
+          if (Number.isFinite(n) && n >= 0) return n;
+        }
+      }
+    }
+    return null;
+  }
+
+  function getItemUniqueId(item, idx) {
+    return String(
+      item?.id ||
+        item?.itemData?.id ||
+        item?.tradeId ||
+        item?.auctionInfo?.tradeId ||
+        item?.auctionData?.tradeId ||
+        `${getItemDefinitionId(item) || 'na'}-${idx}`
+    );
+  }
+
+  async function collectOwnedItems() {
+    const itemService = getItemService();
+    if (!itemService) return [];
+    const methods = [
+      'requestUnassignedItems',
+      'getUnassignedItems',
+      'requestTransferItems',
+      'requestTransferList',
+      'requestClubItems',
+      'getClubItems',
+      'requestDuplicateItems',
+    ];
+    const out = [];
+    const seen = new Set();
+    for (const method of methods) {
+      if (typeof itemService[method] !== 'function') continue;
+      try {
+        const result = await callServiceMethod(itemService, method, [], 15000);
+        const items = extractItemsFromResult(result);
+        for (let i = 0; i < items.length; i += 1) {
+          const key = getItemUniqueId(items[i], i);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(items[i]);
+        }
+      } catch {}
+    }
+    return out;
+  }
+
+  async function getOwnedCopyCount(definitionId, run) {
+    const now = Date.now();
+    if (
+      run &&
+      run.lastOwnedDefId === definitionId &&
+      Number.isFinite(run.lastOwnedCheckAt) &&
+      now - run.lastOwnedCheckAt < 15000 &&
+      Number.isFinite(run.lastOwnedCount)
+    ) {
+      return run.lastOwnedCount;
+    }
+
+    const items = await collectOwnedItems();
+    let count = 0;
+    for (const item of items) {
+      if (getItemDefinitionId(item) === definitionId) count += 1;
+    }
+
+    if (run) {
+      run.lastOwnedDefId = definitionId;
+      run.lastOwnedCheckAt = now;
+      run.lastOwnedCount = count;
+    }
+    return count;
+  }
+
+  function buildSearchCriteria(config) {
+    const criteria = {
+      type: 'player',
+      level: 'gold',
+    };
+    const definitionId = parseNumber(config.definitionId, 0);
+    const minBuyNow = parseNumber(config.minBuyNow, 0);
+    const maxBuyNow = parseNumber(config.maxBuyNow, 0);
+    const minBid = parseNumber(config.minBid, 0);
+    const maxBid = parseNumber(config.maxBid, 0);
+    if (definitionId > 0) {
+      criteria.definitionId = definitionId;
+      criteria.maskedDefId = definitionId;
+      criteria.assetId = definitionId;
+    }
+    if (minBuyNow > 0) criteria.minBuy = minBuyNow;
+    if (maxBuyNow > 0) criteria.maxBuy = maxBuyNow;
+    if (minBid > 0) criteria.minBid = minBid;
+    if (maxBid > 0) criteria.maxBid = maxBid;
+
+    const extraRaw = String(config.extraCriteriaJson || '').trim();
+    if (extraRaw) {
+      try {
+        const extra = JSON.parse(extraRaw);
+        if (extra && typeof extra === 'object') Object.assign(criteria, extra);
+      } catch (err) {
+        logLine(`trader: extra criteria JSON invalid ${String(err)}`);
+      }
+    }
+    return criteria;
+  }
+
+  async function searchTransferMarketByCriteria(config) {
+    const itemService = getItemService();
+    if (!itemService) throw new Error('services.Item unavailable');
+    const method = findMethodByNames(itemService, [
+      'searchTransferMarket',
+      'searchTransferItems',
+      'searchAuctions',
+      'searchAuctionHouse',
+    ]);
+    if (!method) throw new Error('searchTransferMarket method not found');
+
+    const criteria = buildSearchCriteria(config);
+    const pageSize = Math.max(1, Math.min(50, parseNumber(config.pageSize, 16)));
+    const attempts = [
+      [criteria, 1, pageSize],
+      [criteria, pageSize],
+      [criteria],
+    ];
+    let lastErr = null;
+    for (const args of attempts) {
+      try {
+        logLine(`trader: search via ${method} args=${args.length}`);
+        return await callServiceMethod(itemService, method, args, 20000);
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('search failed');
+  }
+
+  function pickBestMarketItem(items, config) {
+    const definitionId = parseNumber(config.definitionId, 0);
+    const maxBuyNow = parseNumber(config.maxBuyNow, 0);
+    const minBuyNow = parseNumber(config.minBuyNow, 0);
+
+    const filtered = items.filter((item) => {
+      const tradeId = getTradeId(item);
+      if (!tradeId) return false;
+      if (definitionId > 0) {
+        const itemDef = getItemDefinitionId(item);
+        if (itemDef !== definitionId) return false;
+      }
+      const bn = getItemBuyNow(item);
+      if (Number.isFinite(minBuyNow) && minBuyNow > 0 && Number.isFinite(bn) && bn < minBuyNow) return false;
+      if (Number.isFinite(maxBuyNow) && maxBuyNow > 0 && Number.isFinite(bn) && bn > maxBuyNow) return false;
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      const ab = getItemBuyNow(a) ?? Number.MAX_SAFE_INTEGER;
+      const bb = getItemBuyNow(b) ?? Number.MAX_SAFE_INTEGER;
+      return ab - bb;
+    });
+    return filtered[0] || null;
+  }
+
+  async function buyMarketItem(item) {
+    const itemService = getItemService();
+    if (!itemService) throw new Error('services.Item unavailable');
+    const method = findMethodByNames(itemService, ['bid', 'placeBid', 'buyNow', 'buyItem']);
+    if (!method) throw new Error('buy method not found');
+
+    const tradeId = getTradeId(item);
+    const buyPrice = getItemBuyNow(item);
+    if (!tradeId || !Number.isFinite(buyPrice)) throw new Error('invalid market item');
+
+    const argPatterns = [
+      [tradeId, buyPrice],
+      [tradeId],
+      [item, buyPrice],
+      [item],
+    ];
+    let lastErr = null;
+    for (const args of argPatterns) {
+      try {
+        logLine(`trader: buy via ${method} tradeId=${tradeId} price=${buyPrice} args=${args.length}`);
+        return await callServiceMethod(itemService, method, args, 20000);
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('buy failed');
+  }
+
+  async function tryGetOwnedItemToList(definitionId) {
+    const itemService = getItemService();
+    if (!itemService) return null;
+
+    const requestMethods = ['requestUnassignedItems', 'getUnassignedItems', 'requestTransferItems', 'requestTransferList'];
+    for (const method of requestMethods) {
+      if (typeof itemService[method] !== 'function') continue;
+      try {
+        const result = await callServiceMethod(itemService, method, [], 15000);
+        const items = extractItemsFromResult(result);
+        const found = items.find((item) => {
+          const def = getItemDefinitionId(item);
+          const tradeId = getTradeId(item);
+          return def === definitionId && !tradeId;
+        });
+        if (found) return found;
+      } catch {}
+    }
+    return null;
+  }
+
+  async function listOwnedItem(item, config) {
+    const itemService = getItemService();
+    if (!itemService) throw new Error('services.Item unavailable');
+
+    const startPrice = parseNumber(config.startPrice, 0);
+    const listBuyNow = parseNumber(config.listBuyNow, 0);
+    const duration = parseNumber(config.duration, 3600);
+    if (!(startPrice > 0 && listBuyNow > 0)) throw new Error('list prices are required');
+
+    const method = findMethodByNames(itemService, ['listItem', 'insertSell', 'sell', 'insertAuction', 'publish']);
+    if (!method) throw new Error('list method not found');
+
+    const itemId = Number(item?.id || item?.itemData?.id || 0);
+    const argPatterns = [
+      [item, startPrice, listBuyNow, duration],
+      [item, duration, startPrice, listBuyNow],
+      [itemId, startPrice, listBuyNow, duration],
+      [item, { startingBid: startPrice, buyNowPrice: listBuyNow, duration }],
+    ];
+    let lastErr = null;
+    for (const args of argPatterns) {
+      try {
+        logLine(`trader: list via ${method} args=${args.length}`);
+        return await callServiceMethod(itemService, method, args, 20000);
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('list failed');
+  }
+
+  async function autoTraderLoop() {
+    const run = state.traderRuntime;
+    if (!run) return;
+    while (run.running) {
+      try {
+        const config = run.config;
+        const minSleepMs = parseNumber(config.minSleepMs, 2200);
+        const maxSleepMs = Math.max(minSleepMs, parseNumber(config.maxSleepMs, 4800));
+        const buyCooldownMinMs = parseNumber(config.buyCooldownMinMs, 900);
+        const buyCooldownMaxMs = Math.max(buyCooldownMinMs, parseNumber(config.buyCooldownMaxMs, 1600));
+        const minCoinsReserve = parseNumber(config.minCoinsReserve, 50000);
+        const maxOwnedCopies = parseNumber(config.maxOwnedCopies, 5);
+        const maxBuys = parseNumber(config.maxBuysPerRun, 0);
+        const configuredDefId = parseNumber(config.definitionId, 0);
+
+        if (!run.lastCoinCheckAt || Date.now() - run.lastCoinCheckAt > 10000 || run.searches === 0) {
+          run.lastCoinCheckAt = Date.now();
+          run.lastCoins = getCurrentCoins();
+          if (Number.isFinite(run.lastCoins)) logLine(`trader: coins=${run.lastCoins}`);
+          if (minCoinsReserve > 0 && Number.isFinite(run.lastCoins) && run.lastCoins < minCoinsReserve) {
+            logLine(`trader: coins below reserve ${run.lastCoins} < ${minCoinsReserve}, stopping`);
+            traderSetStatus(`Stopped: low coins ${run.lastCoins} < reserve ${minCoinsReserve}`, 'warn');
+            run.running = false;
+            break;
+          }
+        }
+
+        const result = await searchTransferMarketByCriteria(config);
+        const items = extractItemsFromResult(result);
+        logLine(`trader: search result items=${items.length}`);
+
+        const target = pickBestMarketItem(items, config);
+        if (!target) {
+          traderSetStatus(`No matching item. Searches: ${run.searches}`, 'warn');
+        } else {
+          const targetDefinitionId = configuredDefId || getItemDefinitionId(target);
+          if (maxOwnedCopies > 0 && targetDefinitionId > 0) {
+            const ownedCount = await getOwnedCopyCount(targetDefinitionId, run);
+            if (ownedCount >= maxOwnedCopies) {
+              logLine(`trader: duplicate guard hit defId=${targetDefinitionId} owned=${ownedCount} max=${maxOwnedCopies}`);
+              traderSetStatus(`Skip buy: owned ${ownedCount} / max ${maxOwnedCopies}`, 'warn');
+              run.searches += 1;
+              const waitMs = randomInt(minSleepMs, maxSleepMs);
+              await sleep(waitMs);
+              continue;
+            }
+          }
+
+          const tradeId = getTradeId(target);
+          const price = getItemBuyNow(target);
+          await buyMarketItem(target);
+          run.buys += 1;
+          logLine(`trader: bought tradeId=${tradeId} price=${price}`);
+          if (Number.isFinite(run.lastCoins) && Number.isFinite(price)) run.lastCoins = Math.max(0, run.lastCoins - price);
+          if (targetDefinitionId > 0 && run.lastOwnedDefId === targetDefinitionId && Number.isFinite(run.lastOwnedCount)) {
+            run.lastOwnedCount += 1;
+          }
+
+          const cooldownMs = randomInt(buyCooldownMinMs, buyCooldownMaxMs);
+          logLine(`trader: post-buy cooldown ${cooldownMs}ms`);
+          await sleep(cooldownMs);
+
+          const definitionId = targetDefinitionId;
+          if (definitionId > 0) {
+            const owned = await tryGetOwnedItemToList(definitionId);
+            if (owned) {
+              await listOwnedItem(owned, config);
+              run.listed += 1;
+              logLine(`trader: listed definitionId=${definitionId}`);
+            } else {
+              logLine(`trader: owned item not found for listing definitionId=${definitionId}`);
+            }
+          }
+
+          if (maxBuys > 0 && run.buys >= maxBuys) {
+            logLine(`trader: reached max buys ${maxBuys}, stopping`);
+            run.running = false;
+            break;
+          }
+        }
+
+        run.searches += 1;
+        const waitMs = randomInt(minSleepMs, maxSleepMs);
+        const coinsText = Number.isFinite(run.lastCoins) ? ` coins=${run.lastCoins}` : '';
+        traderSetStatus(`Running | searches=${run.searches} buys=${run.buys} listed=${run.listed}${coinsText} | sleep=${waitMs}ms`, 'ok');
+        await sleep(waitMs);
+      } catch (err) {
+        logLine(`trader: loop error ${String(err)}`);
+        traderSetStatus(`Error: ${String(err)}`, 'error');
+        await sleep(randomInt(1300, 2600));
+      }
+    }
+
+    if (state.traderRuntime) {
+      state.traderRuntime.running = false;
+      traderSetStatus('Stopped', 'warn');
+      logLine('trader: stopped');
+    }
+  }
+
+  function startAutoTrader() {
+    const config = readTraderFields();
+    saveTraderConfig(config);
+    const definitionId = parseNumber(config.definitionId, 0);
+    if (definitionId <= 0) {
+      traderSetStatus('Definition ID is required', 'error');
+      return;
+    }
+    if (state.traderRuntime?.running) {
+      traderSetStatus('Already running', 'warn');
+      return;
+    }
+    state.traderRuntime = {
+      running: true,
+      searches: 0,
+      buys: 0,
+      listed: 0,
+      lastCoinCheckAt: 0,
+      lastCoins: null,
+      lastOwnedDefId: null,
+      lastOwnedCheckAt: 0,
+      lastOwnedCount: null,
+      config,
+    };
+    traderSetStatus('Starting...', 'info');
+    logLine(`trader: start definitionId=${definitionId}`);
+    autoTraderLoop().catch((err) => {
+      logLine(`trader: fatal error ${String(err)}`);
+      traderSetStatus(`Fatal: ${String(err)}`, 'error');
+      if (state.traderRuntime) state.traderRuntime.running = false;
+    });
+  }
+
+  function stopAutoTrader() {
+    if (state.traderRuntime) state.traderRuntime.running = false;
+    traderSetStatus('Stopping...', 'warn');
+  }
+
+  function createField(label, key, type = 'number', placeholder = '') {
+    const wrap = document.createElement('label');
+    wrap.className = 'pt-futgg-trader-field';
+    const title = document.createElement('span');
+    title.textContent = label;
+    const input = document.createElement(type === 'textarea' ? 'textarea' : 'input');
+    if (type !== 'textarea') input.type = type;
+    input.placeholder = placeholder;
+    input.dataset.key = key;
+    wrap.appendChild(title);
+    wrap.appendChild(input);
+    return { wrap, input };
+  }
+
+  function ensureTraderPanel() {
+    if (!document.body) return;
+    if (state.traderPanel && document.body.contains(state.traderPanel)) return;
+
+    const panel = document.createElement('div');
+    panel.className = TRADER_PANEL_CLASS;
+    panel.innerHTML = `
+      <div class="pt-futgg-trader-header">
+        <strong>FUT.GG Auto Trader</strong>
+      </div>
+      <div class="pt-futgg-trader-grid"></div>
+      <div class="pt-futgg-trader-actions"></div>
+      <div class="pt-futgg-trader-status" data-kind="info">Idle</div>
+    `;
+
+    const grid = panel.querySelector('.pt-futgg-trader-grid');
+    const actions = panel.querySelector('.pt-futgg-trader-actions');
+    const status = panel.querySelector('.pt-futgg-trader-status');
+
+    const fieldDefs = [
+      ['Player Definition ID', 'definitionId', 'number', 'e.g. 20801'],
+      ['Min Buy Now', 'minBuyNow', 'number', '0'],
+      ['Max Buy Now', 'maxBuyNow', 'number', '0'],
+      ['Min Bid', 'minBid', 'number', '0'],
+      ['Max Bid', 'maxBid', 'number', '0'],
+      ['List Start Price', 'startPrice', 'number', '0'],
+      ['List Buy Now', 'listBuyNow', 'number', '0'],
+      ['List Duration (sec)', 'duration', 'number', '3600'],
+      ['Page Size', 'pageSize', 'number', '16'],
+      ['Sleep Min (ms)', 'minSleepMs', 'number', '2200'],
+      ['Sleep Max (ms)', 'maxSleepMs', 'number', '4800'],
+      ['Post-buy Cooldown Min (ms)', 'buyCooldownMinMs', 'number', '900'],
+      ['Post-buy Cooldown Max (ms)', 'buyCooldownMaxMs', 'number', '1600'],
+      ['Min Coins Reserve', 'minCoinsReserve', 'number', '50000'],
+      ['Max Owned Copies', 'maxOwnedCopies', 'number', '5'],
+      ['Max Buys / Run (0 = no limit)', 'maxBuysPerRun', 'number', '0'],
+      ['Extra Search Criteria JSON', 'extraCriteriaJson', 'textarea', '{"quality":"rare"}'],
+    ];
+
+    const fields = {};
+    for (const [label, key, type, placeholder] of fieldDefs) {
+      const field = createField(label, key, type, placeholder);
+      grid.appendChild(field.wrap);
+      fields[key] = field.input;
+    }
+
+    const startBtn = document.createElement('button');
+    startBtn.type = 'button';
+    startBtn.textContent = 'Start';
+    startBtn.addEventListener('click', startAutoTrader);
+
+    const stopBtn = document.createElement('button');
+    stopBtn.type = 'button';
+    stopBtn.textContent = 'Stop';
+    stopBtn.addEventListener('click', stopAutoTrader);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', () => saveTraderConfig(readTraderFields()));
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', () => panel.classList.remove('open'));
+
+    actions.appendChild(startBtn);
+    actions.appendChild(stopBtn);
+    actions.appendChild(saveBtn);
+    actions.appendChild(closeBtn);
+
+    document.body.appendChild(panel);
+    state.traderPanel = panel;
+    state.traderFields = fields;
+    state.traderStatus = status;
+
+    fillTraderFields(getTraderConfig());
+  }
+
+  function openTraderPanel() {
+    ensureTraderPanel();
+    if (!state.traderPanel) return;
+    fillTraderFields(getTraderConfig());
+    state.traderPanel.classList.add('open');
   }
 
   function scoreFromCard(card) {
@@ -236,7 +957,7 @@
     for (const container of containers) {
       const text = (container.textContent || '').toLowerCase();
       if (!text.includes('setting') && !text.includes('paletools')) continue;
-      if (container.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`)) continue;
+      if (container.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`) && container.querySelector(`.${SETTINGS_TRADER_ITEM_CLASS}`)) continue;
 
       const host = container.querySelector('.itemList, ul, .list, .ut-list-view, .ut-button-group') || container;
       const rowTemplate =
@@ -263,6 +984,29 @@
       });
       host.appendChild(item);
       logLine('logs: injected FUT.GG Logs item into settings menu');
+
+      if (!container.querySelector(`.${SETTINGS_TRADER_ITEM_CLASS}`)) {
+        let traderItem;
+        if (rowTemplate) {
+          traderItem = rowTemplate.cloneNode(true);
+          traderItem.classList.add(SETTINGS_TRADER_ITEM_CLASS);
+          traderItem.removeAttribute?.('id');
+          traderItem.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+          setPrimaryText(traderItem, 'FUT.GG Auto Trader');
+        } else {
+          traderItem = document.createElement('button');
+          traderItem.type = 'button';
+          traderItem.className = `${DROPDOWN_ITEM_CLASS} ${SETTINGS_TRADER_ITEM_CLASS}`;
+          traderItem.textContent = 'FUT.GG Auto Trader';
+        }
+        traderItem.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openTraderPanel();
+        });
+        host.appendChild(traderItem);
+        logLine('trader: injected Auto Trader item into settings menu');
+      }
     }
   }
 
@@ -310,29 +1054,53 @@
       titleNode.closest('button, .listFUTItem, li, .ut-list-row-view, .ut-list-item-view, .row, .ut-clickable') || titleNode;
     const host = rowTemplate.parentElement || titleNode.parentElement;
     if (!host) return;
-    if (host.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`)) return;
+    if (!host.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`)) {
+      const item = rowTemplate.cloneNode(true);
+      item.classList.add(SETTINGS_LOG_ITEM_CLASS);
+      item.removeAttribute?.('id');
+      item.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+      setRowLabelStrict(item, 'FUT.GG Logs');
+      const onOpenLogs = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        openLogsPanel();
+      };
+      item.addEventListener('click', onOpenLogs, true);
+      item.addEventListener('touchend', onOpenLogs, true);
+      item.addEventListener('pointerup', onOpenLogs, true);
 
-    const item = rowTemplate.cloneNode(true);
-    item.classList.add(SETTINGS_LOG_ITEM_CLASS);
-    item.removeAttribute?.('id');
-    item.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
-    setRowLabelStrict(item, 'FUT.GG Logs');
-    const onOpenLogs = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation?.();
-      openLogsPanel();
-    };
-    item.addEventListener('click', onOpenLogs, true);
-    item.addEventListener('touchend', onOpenLogs, true);
-    item.addEventListener('pointerup', onOpenLogs, true);
-
-    if (rowTemplate.parentNode) {
-      rowTemplate.parentNode.insertBefore(item, rowTemplate.nextSibling);
-    } else {
-      host.appendChild(item);
+      if (rowTemplate.parentNode) {
+        rowTemplate.parentNode.insertBefore(item, rowTemplate.nextSibling);
+      } else {
+        host.appendChild(item);
+      }
+      logLine('logs: injected FUT.GG Logs item by cloning Paletools row');
     }
-    logLine('logs: injected FUT.GG Logs item by cloning Paletools row');
+
+    if (!host.querySelector(`.${SETTINGS_TRADER_ITEM_CLASS}`)) {
+      const traderItem = rowTemplate.cloneNode(true);
+      traderItem.classList.add(SETTINGS_TRADER_ITEM_CLASS);
+      traderItem.removeAttribute?.('id');
+      traderItem.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+      setRowLabelStrict(traderItem, 'FUT.GG Auto Trader');
+      const onOpenTrader = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        openTraderPanel();
+      };
+      traderItem.addEventListener('click', onOpenTrader, true);
+      traderItem.addEventListener('touchend', onOpenTrader, true);
+      traderItem.addEventListener('pointerup', onOpenTrader, true);
+
+      if (rowTemplate.parentNode) {
+        rowTemplate.parentNode.insertBefore(traderItem, rowTemplate.nextSibling);
+      } else {
+        host.appendChild(traderItem);
+      }
+      logLine('trader: injected Auto Trader item by cloning Paletools row');
+    }
   }
 
   function ensureStatusNode() {
@@ -1808,6 +2576,88 @@
         overflow: hidden;
       }
       .${LOG_PANEL_CLASS}.open { display: block; }
+      .${TRADER_PANEL_CLASS} {
+        display: none;
+        position: fixed;
+        left: 8px;
+        right: 8px;
+        top: 8px;
+        bottom: 8px;
+        z-index: 2147483647;
+        border: 1px solid rgba(78, 230, 235, 0.75);
+        border-radius: 8px;
+        background: rgba(12, 15, 20, 0.98);
+        color: #d7dde6;
+        padding: 10px;
+        overflow: auto;
+      }
+      .${TRADER_PANEL_CLASS}.open { display: block; }
+      .pt-futgg-trader-header {
+        margin-bottom: 8px;
+        color: #4ee6eb;
+      }
+      .pt-futgg-trader-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .pt-futgg-trader-field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 11px;
+      }
+      .pt-futgg-trader-field span {
+        color: #4ee6eb;
+        font-weight: 700;
+      }
+      .pt-futgg-trader-field input,
+      .pt-futgg-trader-field textarea {
+        border: 1px solid rgba(78, 230, 235, 0.7);
+        border-radius: 6px;
+        background: rgba(20, 26, 33, 0.95);
+        color: #d7dde6;
+        font-size: 12px;
+        padding: 6px 8px;
+      }
+      .pt-futgg-trader-field textarea {
+        min-height: 72px;
+        resize: vertical;
+      }
+      .pt-futgg-trader-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+      }
+      .pt-futgg-trader-actions button {
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid rgba(78, 230, 235, 0.7);
+        background: transparent;
+        color: #4ee6eb;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .pt-futgg-trader-status {
+        margin-top: 10px;
+        border: 1px solid rgba(127, 139, 153, 0.8);
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 12px;
+      }
+      .pt-futgg-trader-status[data-kind="ok"] {
+        border-color: rgba(78, 230, 235, 0.8);
+        color: #4ee6eb;
+      }
+      .pt-futgg-trader-status[data-kind="warn"] {
+        border-color: rgba(255, 196, 0, 0.85);
+        color: #ffd25e;
+      }
+      .pt-futgg-trader-status[data-kind="error"] {
+        border-color: rgba(255, 107, 107, 0.9);
+        color: #ff8c8c;
+      }
       .pt-futgg-log-actions {
         display: flex;
         gap: 8px;

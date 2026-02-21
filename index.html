@@ -19,7 +19,7 @@
     }
     .muted { color: #666; }
   </style>
-  <script src="./mobile-bookmark.prod.js?v=044a6aa"></script>
+  <script src="./mobile-bookmark.prod.js?v=pt-futgg-20260221-24"></script>
 </head>
 <body>
   <h1>Drag This To Bookmarks Bar</h1>
@@ -30,6 +30,7 @@
 
   <script>
     (function () {
+      var build = 'pt-futgg-20260221-24';
       var code = (window.paletools && window.paletools['paletools-mobile-custom']) || '';
       var link = document.getElementById('pt-bookmark');
       var status = document.getElementById('status');
@@ -38,7 +39,8 @@
         return;
       }
       link.setAttribute('href', 'javascript:' + code);
-      status.textContent = 'Ready. Drag the link to bookmarks, then run it on the web app page.';
+      link.textContent = 'Paletools iOS ' + build + ' (Drag Me)';
+      status.textContent = 'Ready (' + build + '). Delete old bookmark, drag this one, then run it on the web app page.';
     })();
   </script>
 </body>

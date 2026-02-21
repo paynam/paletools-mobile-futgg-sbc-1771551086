@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-11';
+  const BUILD_ID = 'pt-futgg-20260220-12';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -469,15 +469,13 @@
       if (ids.length) return { game: DEFAULT_GAME, eaId: ids[0], source: 'dom-id' };
     }
 
-    const detailRoot =
-      document.querySelector('.ut-item-details-view, .itemDetailView, .DetailPanel, [class*="itemDetail"], [class*="playerDetail"]') || document.body;
-    const idsFromText = extractEaIdsFromText(detailRoot?.textContent || '');
-    if (idsFromText.length) return { game: DEFAULT_GAME, eaId: idsFromText[0], source: 'text' };
+    const detailRoot = document.querySelector(
+      '.ut-item-details-view, .itemDetailView, .DetailPanel, [class*="itemDetail"], [class*="playerDetail"]'
+    );
+    if (!detailRoot) return null;
 
-    const recent = state.recentPlayerIds[0];
-    if (recent && Date.now() - recent.ts < 30000) {
-      return { game: DEFAULT_GAME, eaId: recent.eaId, source: `recent-${recent.source}` };
-    }
+    const idsFromText = extractEaIdsFromText(detailRoot.textContent || '');
+    if (idsFromText.length) return { game: DEFAULT_GAME, eaId: idsFromText[0], source: 'text' };
 
     return null;
   }

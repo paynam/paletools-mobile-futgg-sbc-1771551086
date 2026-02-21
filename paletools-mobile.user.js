@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-21';
+  const BUILD_ID = 'pt-futgg-20260221-22';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -69,6 +69,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     lastControllerLogKey: '',
     lastRejectLogKey: '',
     lastControllerRootsLogKey: '',
+    lastGoodPlayerCtx: null,
   };
 
   function logLine(message) {
@@ -1077,10 +1078,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   }
 
   function findPlayerContext(hostInfo) {
-    const detailRoot = document.querySelector(
-      '.ut-item-details-view, .itemDetailView, .DetailPanel, .ut-player-bio-view, [class*="itemDetail"], [class*="playerDetail"]'
-    );
-    if (!detailRoot) return null;
+    const detailRoot =
+      document.querySelector(
+        '.ut-item-details-view, .itemDetailView, .DetailPanel, .ut-player-bio-view, [class*="itemDetail"], [class*="playerDetail"]'
+      ) ||
+      hostInfo?.host ||
+      null;
 
     const fromController = resolvePlayerContextFromController(detailRoot);
     if (fromController) return fromController;
@@ -1317,7 +1320,16 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     }
 
     const ctx = findPlayerContext(hostInfo);
-    if (!ctx || !Number.isFinite(ctx.eaId)) {
+    if (ctx && Number.isFinite(ctx.eaId)) {
+      state.lastGoodPlayerCtx = { ...ctx, ts: Date.now() };
+    }
+    const nowMs = Date.now();
+    const stickyCtx =
+      !ctx && state.lastGoodPlayerCtx && nowMs - Number(state.lastGoodPlayerCtx.ts || 0) < 15000
+        ? { game: state.lastGoodPlayerCtx.game, eaId: state.lastGoodPlayerCtx.eaId, source: 'sticky:last-good' }
+        : null;
+    const effectiveCtx = ctx || stickyCtx;
+    if (!effectiveCtx || !Number.isFinite(effectiveCtx.eaId)) {
       if (menuItem) {
         menuItem.dataset.kind = 'warn';
         menuItem.textContent = 'FUT.GG: ID not detected (open FUT.GG Logs)';
@@ -1330,11 +1342,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       return;
     }
 
-    const key = `${ctx.game}-${ctx.eaId}`;
-    const debugKey = `ctx:${key}:${ctx.source || 'unknown'}`;
+    const key = `${effectiveCtx.game}-${effectiveCtx.eaId}`;
+    const debugKey = `ctx:${key}:${effectiveCtx.source || 'unknown'}`;
     if (state.lastPlayerDebugKey !== debugKey) {
       state.lastPlayerDebugKey = debugKey;
-      logLine(`player: context ${key} source=${ctx.source || 'unknown'}`);
+      logLine(`player: context ${key} source=${effectiveCtx.source || 'unknown'}`);
     }
     const cached = state.playerCache.get(key);
     if (cached) {
@@ -1344,7 +1356,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       return;
     }
 
-    const payload = await loadPlayerData(ctx.game, ctx.eaId);
+    const payload = await loadPlayerData(effectiveCtx.game, effectiveCtx.eaId);
     if (!menuItem) return;
     menuItem.dataset.kind = payload.error ? 'error' : 'ok';
     menuItem.textContent = formatPlayerMenuText(payload);

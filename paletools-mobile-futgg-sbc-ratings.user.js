@@ -415,6 +415,86 @@
     logLine('player: network sniffer installed');
   }
 
+  function getValueAtPath(obj, path) {
+    let cur = obj;
+    for (const key of path) {
+      if (!cur || typeof cur !== 'object' || !(key in cur)) return undefined;
+      cur = cur[key];
+    }
+    return cur;
+  }
+
+  function pickEaIdFromObject(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    const candidates = [
+      obj.definitionId,
+      obj._definitionId,
+      obj.resourceId,
+      obj._resourceId,
+      obj.eaId,
+      obj._eaId,
+      obj.id,
+      obj._id,
+    ]
+      .map((v) => Number(v))
+      .filter((n) => Number.isFinite(n) && n >= 100000);
+    return candidates.length ? candidates[0] : null;
+  }
+
+  function resolvePlayerContextFromController() {
+    const roots = [];
+    try {
+      const app = typeof getAppMain === 'function' ? getAppMain() : null;
+      if (app) {
+        roots.push(app);
+        try {
+          const rootVc = typeof app.getRootViewController === 'function' ? app.getRootViewController() : null;
+          if (rootVc) roots.push(rootVc);
+          const presented = typeof rootVc?.getPresentedViewController === 'function' ? rootVc.getPresentedViewController() : null;
+          if (presented) roots.push(presented);
+        } catch {}
+        try {
+          const current = typeof app.getCurrentController === 'function' ? app.getCurrentController() : null;
+          if (current) roots.push(current);
+        } catch {}
+      }
+    } catch {}
+
+    const itemPaths = [
+      ['presentedItem'],
+      ['_presentedItem'],
+      ['item'],
+      ['_item'],
+      ['itemData'],
+      ['_itemData'],
+      ['_itemDetailController', 'item'],
+      ['_itemDetailController', '_item'],
+      ['_itemDetailsController', 'item'],
+      ['_itemDetailsController', '_item'],
+      ['itemDetailController', 'item'],
+      ['itemDetailController', '_item'],
+      ['_viewmodel', 'item'],
+      ['_viewmodel', '_item'],
+      ['_viewmodel', 'itemData'],
+      ['_viewmodel', '_itemData'],
+    ];
+
+    for (const root of roots) {
+      if (!root || typeof root !== 'object') continue;
+
+      for (const path of itemPaths) {
+        const item = getValueAtPath(root, path);
+        const eaId = pickEaIdFromObject(item);
+        if (eaId) return { game: DEFAULT_GAME, eaId, source: `controller:${path.join('.')}` };
+      }
+
+      const eaIdDirect = pickEaIdFromObject(root);
+      if (eaIdDirect) return { game: DEFAULT_GAME, eaId: eaIdDirect, source: 'controller:direct' };
+    }
+
+    return null;
+  }
+
   function isLikelyPlayerDetailsView() {
     const selectors = [
       '.ut-item-details-view',
@@ -437,10 +517,15 @@
   }
 
   function findPlayerContext() {
+    const detailRoot = document.querySelector(
+      '.ut-item-details-view, .itemDetailView, .DetailPanel, .ut-player-bio-view, [class*="itemDetail"], [class*="playerDetail"]'
+    );
+    if (!detailRoot) return null;
+
     const linkSelectors = ['a[href*="fut.gg/players/"]', 'a[href*="/compare/"]', 'a[href*="/players/"]'];
 
     for (const selector of linkSelectors) {
-      const links = document.querySelectorAll(selector);
+      const links = detailRoot.querySelectorAll(selector);
       for (const link of links) {
         const href = link.getAttribute('href') || '';
         const parsed = parseGameEaIdFromText(href);
@@ -448,14 +533,14 @@
       }
     }
 
-    const mediaNodes = document.querySelectorAll('img[src], source[srcset]');
+    const mediaNodes = detailRoot.querySelectorAll('img[src], source[srcset]');
     for (const node of mediaNodes) {
       const src = node.getAttribute('src') || node.getAttribute('srcset') || '';
       const parsed = parseGameEaIdFromText(src);
       if (parsed && isVisible(node)) return { ...parsed, source: 'media' };
     }
 
-    const idNodes = document.querySelectorAll(
+    const idNodes = detailRoot.querySelectorAll(
       '[data-player-definition-id], [data-definition-id], [data-entity-id], .player-definition-id, [class*="definition-id"]'
     );
     for (const node of idNodes) {
@@ -469,13 +554,8 @@
       if (ids.length) return { game: DEFAULT_GAME, eaId: ids[0], source: 'dom-id' };
     }
 
-    const detailRoot = document.querySelector(
-      '.ut-item-details-view, .itemDetailView, .DetailPanel, [class*="itemDetail"], [class*="playerDetail"]'
-    );
-    if (!detailRoot) return null;
-
-    const idsFromText = extractEaIdsFromText(detailRoot.textContent || '');
-    if (idsFromText.length) return { game: DEFAULT_GAME, eaId: idsFromText[0], source: 'text' };
+    const fromController = resolvePlayerContextFromController();
+    if (fromController) return fromController;
 
     return null;
   }

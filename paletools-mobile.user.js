@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-18';
+  const BUILD_ID = 'pt-futgg-20260221-19';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -68,6 +68,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     lastPlayerDebugKey: '',
     lastControllerLogKey: '',
     lastRejectLogKey: '',
+    lastControllerRootsLogKey: '',
   };
 
   function logLine(message) {
@@ -500,7 +501,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       obj._id,
     ]
       .map((v) => Number(v))
-      .filter((n) => Number.isFinite(n) && n >= 100000);
+      .filter((n) => Number.isFinite(n) && n >= 10000);
     return candidates.length ? candidates[0] : null;
   }
 
@@ -550,23 +551,88 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   function getControllerRoots() {
     const roots = [];
+    const addRoot = (node, source) => {
+      if (!node || typeof node !== 'object') return;
+      roots.push({ node, source });
+    };
     try {
       const app = typeof getAppMain === 'function' ? getAppMain() : null;
       if (app) {
-        roots.push({ node: app, source: 'app' });
+        addRoot(app, 'app');
         try {
           const rootVc = typeof app.getRootViewController === 'function' ? app.getRootViewController() : null;
-          if (rootVc) roots.push({ node: rootVc, source: 'rootVc' });
+          if (rootVc) addRoot(rootVc, 'rootVc');
           const presented = typeof rootVc?.getPresentedViewController === 'function' ? rootVc.getPresentedViewController() : null;
-          if (presented) roots.push({ node: presented, source: 'rootVc.presented' });
+          if (presented) addRoot(presented, 'rootVc.presented');
         } catch {}
         try {
           const current = typeof app.getCurrentController === 'function' ? app.getCurrentController() : null;
-          if (current) roots.push({ node: current, source: 'app.currentController' });
+          if (current) addRoot(current, 'app.currentController');
         } catch {}
       }
     } catch {}
-    return roots;
+
+    const controllerLinkKeys = [
+      'childViewControllers',
+      '_childViewControllers',
+      'presentedViewController',
+      '_presentedViewController',
+      'navigationController',
+      '_navigationController',
+      'viewControllers',
+      '_viewControllers',
+      '_currentController',
+      'currentController',
+      'presentationController',
+      '_presentationController',
+    ];
+
+    const seen = new WeakSet();
+    const queue = roots.slice(0);
+    let visited = 0;
+    const MAX_VISIT = 220;
+    while (queue.length && visited < MAX_VISIT) {
+      const cur = queue.shift();
+      const node = cur?.node;
+      if (!node || typeof node !== 'object') continue;
+      if (seen.has(node)) continue;
+      seen.add(node);
+      visited += 1;
+      for (const key of controllerLinkKeys) {
+        const val = node[key];
+        if (!val || typeof val !== 'object') continue;
+        if (Array.isArray(val)) {
+          const lim = Math.min(val.length, 20);
+          for (let i = 0; i < lim; i++) {
+            const child = val[i];
+            if (child && typeof child === 'object') {
+              const source = `${cur.source}.${key}[${i}]`;
+              addRoot(child, source);
+              queue.push({ node: child, source });
+            }
+          }
+        } else {
+          const source = `${cur.source}.${key}`;
+          addRoot(val, source);
+          queue.push({ node: val, source });
+        }
+      }
+    }
+
+    const uniq = [];
+    const seen2 = new WeakSet();
+    for (const r of roots) {
+      if (!r?.node || typeof r.node !== 'object') continue;
+      if (seen2.has(r.node)) continue;
+      seen2.add(r.node);
+      uniq.push(r);
+    }
+    const rootsLogKey = String(uniq.length);
+    if (state.lastControllerRootsLogKey !== rootsLogKey) {
+      state.lastControllerRootsLogKey = rootsLogKey;
+      logLine(`player: controller roots=${uniq.length}`);
+    }
+    return uniq;
   }
 
   function resolvePlayerContextFromController(detailRoot) {

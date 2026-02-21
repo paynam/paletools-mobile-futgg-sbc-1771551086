@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-15';
+  const BUILD_ID = 'pt-futgg-20260221-16';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -508,6 +508,9 @@
   function getDisplayedPlayerName(detailRoot) {
     if (!detailRoot) return null;
     const selectors = [
+      '.entityContainer .name',
+      '.firstname',
+      '.lastname',
       '.name',
       '.title',
       'h1',
@@ -578,6 +581,9 @@
     ];
 
     const candidates = [];
+    const badPathRe =
+      /(hubmessages|message|tile|store|pack|objective|transfer|market|sbc|navigation|tabbar|gameflow|news|banner|inbox)/i;
+    const detailLikePathRe = /(itemdetail|itemdetails|presenteditem|currentitem|itemdata|detail|playerbio|bio)/i;
 
     for (const rootWrap of roots) {
       const root = rootWrap?.node;
@@ -631,7 +637,7 @@
         const eaId = pickEaIdFromObject(node);
         if (eaId) {
           const nodeName = pickPlayerNameFromObject(node);
-          let score = 30;
+          let score = 20;
           if (nodeName) score += 20;
           if (displayedName && nodeName) score += Math.round(100 * nameSimilarityScore(displayedName, nodeName));
           if (Number(node?.rating) > 0) score += 5;
@@ -667,13 +673,26 @@
     }
 
     if (!candidates.length) return null;
-    candidates.sort((a, b) => b.score - a.score);
-    const best = candidates[0];
-    const logKey = `${best.game}-${best.eaId}:${best.source}:${best.score}:${best.playerName || ''}:${candidates.length}`;
+    const filtered = candidates.filter((c) => {
+      const source = c.source || '';
+      if (badPathRe.test(source) && !detailLikePathRe.test(source)) return false;
+      const sim = displayedName && c.playerName ? nameSimilarityScore(displayedName, c.playerName) : 0;
+      if (sim >= 0.6) return true;
+      if (detailLikePathRe.test(source) && c.score >= 95) return true;
+      if (!displayedName && detailLikePathRe.test(source) && c.score >= 105) return true;
+      return false;
+    });
+    if (!filtered.length) {
+      logLine(`player: controller candidates rejected total=${candidates.length} displayedName=${displayedName || 'n/a'}`);
+      return null;
+    }
+    filtered.sort((a, b) => b.score - a.score);
+    const best = filtered[0];
+    const logKey = `${best.game}-${best.eaId}:${best.source}:${best.score}:${best.playerName || ''}:${filtered.length}/${candidates.length}`;
     if (state.lastControllerLogKey !== logKey) {
       state.lastControllerLogKey = logKey;
       logLine(
-        `player: controller candidates=${candidates.length} best=${best.game}-${best.eaId} score=${best.score} source=${
+        `player: controller candidates=${filtered.length}/${candidates.length} best=${best.game}-${best.eaId} score=${best.score} source=${
           best.source
         } name=${best.playerName || 'n/a'}`
       );

@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-12';
+  const BUILD_ID = 'pt-futgg-20260220-13';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -565,6 +565,7 @@
     if (playerData.error) return `FUT.GG: ${playerData.error}`;
 
     const parts = [];
+    if (playerData.playerName) parts.push(`Player ${playerData.playerName}`);
     if (Number.isFinite(playerData.userUpPct)) {
       const votesSuffix = Number.isFinite(playerData.userVotes) ? ` (${playerData.userVotes} votes)` : '';
       parts.push(`User ${playerData.userUpPct}%${votesSuffix}`);
@@ -605,6 +606,10 @@
         'Player definition request'
       );
       const itemId = Number(itemPayload?.data?.id);
+      const firstName = String(itemPayload?.data?.firstName || '').trim();
+      const lastName = String(itemPayload?.data?.lastName || '').trim();
+      const fallbackName = String(itemPayload?.data?.name || '').trim();
+      const playerName = [firstName, lastName].filter(Boolean).join(' ') || fallbackName || null;
       const identifiers = Number.isFinite(itemId) ? `${PLAYER_CONTENT_TYPE}_${itemId}` : null;
 
       const [voteResult, metarankResult, chemResult, priceResult, chemNameMap] = await Promise.all([
@@ -638,6 +643,7 @@
         .filter(Boolean);
 
       const payload = {
+        playerName,
         userUpPct,
         userVotes: total,
         bestScore: Number.isFinite(Number(best?.score)) ? Number(best.score) : null,

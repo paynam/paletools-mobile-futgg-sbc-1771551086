@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-20';
+  const BUILD_ID = 'pt-futgg-20260221-21';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -484,23 +484,41 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (typeof originalFetch === 'function') {
         window.fetch = function (...args) {
           let url = '';
+          const isOwnFutggTraffic = (u) =>
+            /fut\.gg|api\.codetabs\.com|corsproxy\.io|allorigins\.win|isomorphic-git\.org/i.test(String(u || ''));
           try {
             url = String(args?.[0]?.url || args?.[0] || '');
-            const ids = extractEaIdsFromText(url);
-            for (const id of ids) addRecentPlayerId(id, 'fetch');
+            if (!isOwnFutggTraffic(url)) {
+              const ids = extractEaIdsFromText(url);
+              for (const id of ids) addRecentPlayerId(id, 'fetch');
+            }
           } catch {}
           const p = originalFetch.apply(this, args);
           try {
             Promise.resolve(p)
               .then((resp) => {
                 try {
+                  if (isOwnFutggTraffic(url)) return;
                   if (!resp || typeof resp.clone !== 'function') return;
                   const ct = String(resp.headers?.get?.('content-type') || '');
-                  if (!/json/i.test(ct)) return;
+                  if (/json/i.test(ct)) {
+                    return resp
+                      .clone()
+                      .json()
+                      .then((body) => {
+                        const ids = extractEaIdsFromJsonLike(body);
+                        for (const id of ids) addRecentPlayerId(id, 'fetch-body');
+                      })
+                      .catch(() => {});
+                  }
                   return resp
                     .clone()
-                    .json()
-                    .then((body) => {
+                    .text()
+                    .then((text) => {
+                      const t = String(text || '').trim();
+                      if (!t || t.length > 500000) return;
+                      if (!(t.startsWith('{') || t.startsWith('['))) return;
+                      const body = JSON.parse(t);
                       const ids = extractEaIdsFromJsonLike(body);
                       for (const id of ids) addRecentPlayerId(id, 'fetch-body');
                     })
@@ -522,8 +540,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       XMLHttpRequest.prototype.open = function (method, url, ...rest) {
         try {
           this.__ptFutggUrl = String(url || '');
-          const ids = extractEaIdsFromText(String(url || ''));
-          for (const id of ids) addRecentPlayerId(id, 'xhr');
+          if (!/fut\.gg|api\.codetabs\.com|corsproxy\.io|allorigins\.win|isomorphic-git\.org/i.test(this.__ptFutggUrl)) {
+            const ids = extractEaIdsFromText(String(url || ''));
+            for (const id of ids) addRecentPlayerId(id, 'xhr');
+          }
         } catch {}
         return originalOpen.call(this, method, url, ...rest);
       };
@@ -531,10 +551,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         try {
           this.addEventListener('load', () => {
             try {
+              if (/fut\.gg|api\.codetabs\.com|corsproxy\.io|allorigins\.win|isomorphic-git\.org/i.test(this.__ptFutggUrl || '')) return;
               const ct = String(this.getResponseHeader?.('content-type') || '');
-              if (!/json/i.test(ct)) return;
               const text = String(this.responseText || '');
               if (!text || text.length > 500000) return;
+              if (!/json/i.test(ct)) {
+                const t = text.trim();
+                if (!(t.startsWith('{') || t.startsWith('['))) return;
+              }
               const body = JSON.parse(text);
               const ids = extractEaIdsFromJsonLike(body);
               for (const id of ids) addRecentPlayerId(id, 'xhr-body');

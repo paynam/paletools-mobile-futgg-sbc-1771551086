@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-17';
+  const BUILD_ID = 'pt-futgg-20260221-18';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -726,8 +726,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (!node || typeof node !== 'object') return [];
     const out = [];
     const keys = Object.getOwnPropertyNames(node);
+    let genericAdded = 0;
     for (const key of keys) {
       if (!key) continue;
+      const val = node[key];
+      if (!val || typeof val !== 'object') continue;
       if (
         key.startsWith('__reactProps$') ||
         key.startsWith('__reactFiber$') ||
@@ -735,10 +738,21 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         key === '_viewmodel' ||
         key === '_currentController' ||
         key === 'controller' ||
-        key === 'viewmodel'
+        key === 'viewmodel' ||
+        key === '_item' ||
+        key === 'item' ||
+        key === '_player' ||
+        key === 'player' ||
+        key === '_currentItem' ||
+        key === 'currentItem' ||
+        key === 'itemData'
       ) {
-        const val = node[key];
-        if (val && typeof val === 'object') out.push({ obj: val, key });
+        out.push({ obj: val, key });
+        continue;
+      }
+      if ((key.startsWith('_') || key.toLowerCase().includes('item') || key.toLowerCase().includes('player')) && genericAdded < 20) {
+        out.push({ obj: val, key });
+        genericAdded += 1;
       }
     }
     return out;
@@ -750,10 +764,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       { node: detailRoot, label: 'detailRoot' },
       { node: hostInfo?.host, label: 'menuHost' },
       { node: hostInfo?.templateNode, label: 'menuTemplate' },
+      { node: hostInfo?.host?.parentElement, label: 'menuHostParent' },
+      { node: document.querySelector('.ut-item-details-view, .itemDetailView, .DetailPanel, .ut-player-bio-view'), label: 'detailsNode' },
     ].filter((x) => x.node);
 
     const badPathRe = /(hubmessages|message|tile|store|pack|objective|transfer|market|sbc|navigation|tabbar|news|banner|inbox)/i;
-    const goodPathRe = /(item|player|detail|bio|viewmodel|controller|entity|presented)/i;
+    const goodPathRe = /(item|player|detail|bio|viewmodel|controller|entity|presented|current|selected|active)/i;
     const candidates = [];
 
     for (const seed of seedNodes) {
@@ -809,11 +825,16 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       }
     }
 
-    if (!candidates.length) return null;
+    if (!candidates.length) {
+      logLine('player: ui candidates=0');
+      return null;
+    }
     const filtered = candidates.filter((c) => {
       if (c.score >= 90) return true;
       const sim = displayedName && c.playerName ? nameSimilarityScore(displayedName, c.playerName) : 0;
-      return sim >= 0.6;
+      if (sim >= 0.6) return true;
+      if (!displayedName && goodPathRe.test(c.source) && !badPathRe.test(c.source) && c.score >= 70) return true;
+      return false;
     });
     if (!filtered.length) return null;
     filtered.sort((a, b) => b.score - a.score);
@@ -905,8 +926,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const actionNodes = Array.from(document.querySelectorAll('button, [role="button"], .btn-standard, .ut-button-control'));
     for (const node of actionNodes) {
       const text = (node.textContent || '').toLowerCase().trim();
+      const cls = `${node.className || ''} ${(node.id || '')}`.toLowerCase();
       if (!isVisible(node)) continue;
-      if (!text.includes('find lowest market price') && !text.includes('copy player name')) continue;
+      const matchesText = text.includes('find lowest market price') || text.includes('copy player name');
+      const matchesClass =
+        cls.includes('copyplayername') || cls.includes('copy-player-name') || cls.includes('lowestmarketprice') || cls.includes('findlowest');
+      if (!matchesText && !matchesClass) continue;
 
       const host = node.parentElement;
       if (!host) continue;

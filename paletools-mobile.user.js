@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-25';
+  const BUILD_ID = 'pt-futgg-20260221-26';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -2327,6 +2327,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       const key = normalize(set?.name);
       if (!key) continue;
       const ratingLabel = formatRatings(set);
+      const cost = Number(set?.cost);
 
       const item = {
         key,
@@ -2334,6 +2335,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         name: set.name,
         slug: set.slug,
         ratingLabel,
+        cost: Number.isFinite(cost) && cost > 0 ? cost : null,
       };
 
       if (!byName.has(key)) byName.set(key, []);
@@ -2576,7 +2578,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (!card || !sbc) return;
     const voteLabel = formatVoteLabel(sbc);
     const fallback = sbc.ratingLabel ? `REQ ${sbc.ratingLabel}` : null;
-    const text = voteLabel ? `FUT.GG ${voteLabel}` : fallback ? `FUT.GG ${fallback}` : null;
+    const valueText = voteLabel || fallback;
+    const costLabel = formatCoins(sbc.cost);
+    const text = valueText
+      ? `FUT.GG ${valueText}${costLabel ? ` | ${costLabel}` : ''}`
+      : costLabel
+        ? `FUT.GG ${costLabel}`
+        : null;
     if (!text) return;
 
     const existing = card.querySelector(`.${CHIP_CLASS}`);

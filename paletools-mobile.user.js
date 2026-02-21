@@ -25,7 +25,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260220-13';
+  const BUILD_ID = 'pt-futgg-20260220-14';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -284,14 +284,30 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     node.textContent = text;
   }
 
+  function setRowLabelStrict(node, text) {
+    const targets = node.querySelectorAll('.label, .title, .name, .btn-text, span, div');
+    let replaced = false;
+    for (const t of targets) {
+      if (!t || t.children.length > 0) continue;
+      const cur = (t.textContent || '').trim();
+      if (!cur) continue;
+      t.textContent = text;
+      replaced = true;
+      break;
+    }
+    if (!replaced) setPrimaryText(node, text);
+  }
+
   function ensurePaletoolsSettingsLogsHook() {
     let titleNode = document.querySelector('[id^="plugin-title-"], [class*="plugin-title-"]');
     if (!titleNode) {
-      const candidates = Array.from(document.querySelectorAll('button, .listFUTItem, li, .ut-list-row-view, .ut-list-item-view'));
+      const candidates = Array.from(
+        document.querySelectorAll('button, .listFUTItem, li, .ut-list-row-view, .ut-list-item-view, .ut-clickable, [role="button"]')
+      );
       titleNode =
         candidates.find((n) => {
           const t = (n.textContent || '').toLowerCase();
-          return t.includes('paletools') && t.includes('setting');
+          return t.includes('paletools');
         }) || null;
     }
     if (!titleNode) return;
@@ -306,15 +322,23 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     item.classList.add(SETTINGS_LOG_ITEM_CLASS);
     item.removeAttribute?.('id');
     item.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
-    setPrimaryText(item, 'FUT.GG Logs');
-    item.addEventListener('click', (e) => {
+    setRowLabelStrict(item, 'FUT.GG Logs');
+    const onOpenLogs = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation?.();
       openLogsPanel();
-    });
+    };
+    item.addEventListener('click', onOpenLogs, true);
+    item.addEventListener('touchend', onOpenLogs, true);
+    item.addEventListener('pointerup', onOpenLogs, true);
 
-    host.appendChild(item);
-    logLine('logs: injected FUT.GG Logs item into Paletools settings list');
+    if (rowTemplate.parentNode) {
+      rowTemplate.parentNode.insertBefore(item, rowTemplate.nextSibling);
+    } else {
+      host.appendChild(item);
+    }
+    logLine('logs: injected FUT.GG Logs item by cloning Paletools row');
   }
 
   function ensureStatusNode() {

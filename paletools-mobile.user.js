@@ -235,20 +235,39 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   function ensureSettingsLogsHook() {
     const containers = Array.from(
-      document.querySelectorAll('.ut-drop-down-view, .ut-drop-down-pop-up, .ut-context-menu, .ut-pop-up-view, .ui-dialog')
+      document.querySelectorAll(
+        '.ut-drop-down-view, .ut-drop-down-pop-up, .ut-context-menu, .ut-pop-up-view, .ui-dialog, .ut-menu-view'
+      )
     );
     for (const container of containers) {
       const text = (container.textContent || '').toLowerCase();
-      if (!text.includes('setting')) continue;
+      if (!text.includes('setting') && !text.includes('paletools')) continue;
       if (container.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`)) continue;
 
       const host = container.querySelector('.itemList, ul, .list, .ut-list-view, .ut-button-group') || container;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `${DROPDOWN_ITEM_CLASS} ${SETTINGS_LOG_ITEM_CLASS}`;
-      btn.textContent = 'FUT.GG Logs';
-      btn.addEventListener('click', () => openLogsPanel());
-      host.appendChild(btn);
+      const rowTemplate =
+        host.querySelector('button, .listFUTItem, li, .ut-list-row-view, .ut-list-item-view, .row, .ut-clickable') || null;
+
+      let item;
+      if (rowTemplate) {
+        item = rowTemplate.cloneNode(true);
+        item.classList.add(SETTINGS_LOG_ITEM_CLASS);
+        item.removeAttribute?.('id');
+        item.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+        setPrimaryText(item, 'FUT.GG Logs');
+      } else {
+        item = document.createElement('button');
+        item.type = 'button';
+        item.className = `${DROPDOWN_ITEM_CLASS} ${SETTINGS_LOG_ITEM_CLASS}`;
+        item.textContent = 'FUT.GG Logs';
+      }
+
+      item.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openLogsPanel();
+      });
+      host.appendChild(item);
       logLine('logs: injected FUT.GG Logs item into settings menu');
     }
   }
@@ -266,7 +285,15 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   }
 
   function ensurePaletoolsSettingsLogsHook() {
-    const titleNode = document.querySelector('[id^="plugin-title-"], [class*="plugin-title-"]');
+    let titleNode = document.querySelector('[id^="plugin-title-"], [class*="plugin-title-"]');
+    if (!titleNode) {
+      const candidates = Array.from(document.querySelectorAll('button, .listFUTItem, li, .ut-list-row-view, .ut-list-item-view'));
+      titleNode =
+        candidates.find((n) => {
+          const t = (n.textContent || '').toLowerCase();
+          return t.includes('paletools') && t.includes('setting');
+        }) || null;
+    }
     if (!titleNode) return;
 
     const rowTemplate =

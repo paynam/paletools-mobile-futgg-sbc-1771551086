@@ -38,7 +38,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260222-27';
+  const BUILD_ID = 'pt-futgg-20260222-30';
+  const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -53,8 +54,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const PLAYER_MENU_ITEM_CLASS = 'pt-futgg-player-menu-item';
   const SETTINGS_LOG_ITEM_CLASS = 'pt-futgg-settings-log-item';
   const SETTINGS_TRADER_ITEM_CLASS = 'pt-futgg-settings-trader-item';
+  const SETTINGS_DAILY_ITEM_CLASS = 'pt-futgg-settings-daily-item';
+  const SBC_AUTO_BTN_CLASS = 'pt-futgg-sbc-auto-btn';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
   const TRADER_PANEL_CLASS = 'pt-futgg-trader-panel';
+  const DAILY_PANEL_CLASS = 'pt-futgg-daily-panel';
   const DROPDOWN_ITEM_CLASS = 'pt-futgg-sort-item';
   const SORT_DESC_VALUE = '__pt_futgg_desc__';
   const SORT_ASC_VALUE = '__pt_futgg_asc__';
@@ -62,6 +66,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const PLAYER_CONTENT_TYPE = 27;
   const DEFAULT_GAME = '26';
   const TRADER_STORAGE_KEY = 'pt_futgg_auto_trader_v1';
+  const DAILY_STORAGE_KEY = 'pt_futgg_daily_runner_v1';
   const DEFAULT_TRADER_CONFIG = {
     enabled: false,
     searchText: '',
@@ -83,6 +88,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     maxBuysPerRun: '0',
     extraCriteriaJson: '',
   };
+  const DEFAULT_DAILY_CONFIG = {
+    typesCsv: 'bronze,silver,gold',
+    maxRepeats: '5',
+    actionDelayMs: '900',
+    stepTimeoutMs: '12000',
+    tileHintCsv: 'daily,upgrade',
+  };
 
   const state = {
     byName: new Map(),
@@ -101,6 +113,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     traderSearchResults: null,
     traderConfig: null,
     traderRuntime: null,
+    dailyPanel: null,
+    dailyFields: null,
+    dailyStatus: null,
+    dailyConfig: null,
+    dailyRuntime: null,
     playerMenuNode: null,
     playerCache: new Map(),
     chemStyleNamesByGame: new Map(),
@@ -113,6 +130,39 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     lastRejectLogKey: '',
     lastControllerRootsLogKey: '',
     lastGoodPlayerCtx: null,
+    sbcAutoRun: null,
+  };
+
+  const cleanupFns = [];
+  const addCleanup = (fn) => {
+    if (typeof fn === 'function') cleanupFns.push(fn);
+  };
+  const runCleanup = () => {
+    while (cleanupFns.length) {
+      const fn = cleanupFns.pop();
+      try {
+        fn();
+      } catch {}
+    }
+  };
+  const previousRuntime = window[ADDON_RUNTIME_KEY];
+  if (previousRuntime && typeof previousRuntime.shutdown === 'function') {
+    try {
+      previousRuntime.shutdown();
+    } catch {}
+  }
+  window[ADDON_RUNTIME_KEY] = {
+    build: BUILD_ID,
+    shutdown: () => {
+      try {
+        state.sbcAutoRun = null;
+        if (state.dailyRuntime) state.dailyRuntime.running = false;
+      } catch {}
+      runCleanup();
+      try {
+        document.querySelectorAll(`.${SBC_AUTO_BTN_CLASS}`).forEach((n) => n.remove());
+      } catch {}
+    },
   };
 
   function logLine(message) {
@@ -183,6 +233,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return out;
   }
 
+  function normalizeDailyConfig(input) {
+    const out = { ...DEFAULT_DAILY_CONFIG, ...(input || {}) };
+    for (const key of Object.keys(DEFAULT_DAILY_CONFIG)) out[key] = String(out[key] ?? DEFAULT_DAILY_CONFIG[key]);
+    return out;
+  }
+
   function getTraderConfig() {
     if (state.traderConfig) return state.traderConfig;
     try {
@@ -202,6 +258,28 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       logLine('trader: config saved');
     } catch (err) {
       logLine(`trader: config save failed ${String(err)}`);
+    }
+  }
+
+  function getDailyConfig() {
+    if (state.dailyConfig) return state.dailyConfig;
+    try {
+      const raw = localStorage.getItem(DAILY_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      state.dailyConfig = normalizeDailyConfig(parsed);
+    } catch {
+      state.dailyConfig = normalizeDailyConfig(null);
+    }
+    return state.dailyConfig;
+  }
+
+  function saveDailyConfig(config) {
+    state.dailyConfig = normalizeDailyConfig(config);
+    try {
+      localStorage.setItem(DAILY_STORAGE_KEY, JSON.stringify(state.dailyConfig));
+      logLine('daily: config saved');
+    } catch (err) {
+      logLine(`daily: config save failed ${String(err)}`);
     }
   }
 
@@ -1009,6 +1087,310 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     state.traderPanel.classList.add('open');
   }
 
+  function dailySetStatus(text, kind = 'info') {
+    if (!state.dailyStatus) return;
+    state.dailyStatus.dataset.kind = kind;
+    state.dailyStatus.textContent = text;
+  }
+
+  function readDailyFields() {
+    const fields = state.dailyFields || {};
+    return normalizeDailyConfig({
+      typesCsv: fields.typesCsv?.value || '',
+      maxRepeats: fields.maxRepeats?.value || '',
+      actionDelayMs: fields.actionDelayMs?.value || '',
+      stepTimeoutMs: fields.stepTimeoutMs?.value || '',
+      tileHintCsv: fields.tileHintCsv?.value || '',
+    });
+  }
+
+  function fillDailyFields(config) {
+    const fields = state.dailyFields || {};
+    for (const key of Object.keys(fields)) {
+      if (!(key in config)) continue;
+      fields[key].value = String(config[key] ?? '');
+    }
+  }
+
+  function parseCsvTokens(raw) {
+    return String(raw || '')
+      .split(',')
+      .map((x) => x.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  function isElementVisible(el) {
+    if (!el || !document.documentElement.contains(el)) return false;
+    const style = window.getComputedStyle(el);
+    if (!style || style.visibility === 'hidden' || style.display === 'none') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function getClickableCandidates(root = document) {
+    return Array.from(
+      root.querySelectorAll(
+        'button, [role="button"], a, .btn-standard, .ut-clickable, .listFUTItem, .ut-list-row-view, .ut-list-item-view, .tile, .ut-sbc-set-tile-view, .ut-sbc-challenge-tile-view, .ut-sbc-challenge-table-row-view'
+      )
+    );
+  }
+
+  function getNodeText(node) {
+    return String(node?.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function isNodeDisabled(node) {
+    if (!node) return true;
+    const attrDisabled =
+      node.hasAttribute?.('disabled') ||
+      node.getAttribute?.('aria-disabled') === 'true' ||
+      node.classList?.contains('disabled') ||
+      node.classList?.contains('is-disabled');
+    return !!attrDisabled;
+  }
+
+  function clickNode(node, reason = '') {
+    if (!node || !isElementVisible(node) || isNodeDisabled(node)) return false;
+    try {
+      node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      node.click();
+      if (reason) logLine(`daily: click ${reason}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function findBestNodeByTokens(tokens, { root = document, requireAny = [], rejectTokens = [] } = {}) {
+    const list = getClickableCandidates(root);
+    const scored = [];
+    for (const node of list) {
+      if (!isElementVisible(node) || isNodeDisabled(node)) continue;
+      const text = getNodeText(node);
+      if (!text) continue;
+      if (rejectTokens.some((t) => text.includes(t))) continue;
+      if (tokens.some((t) => !text.includes(t))) continue;
+      if (requireAny.length && !requireAny.some((t) => text.includes(t))) continue;
+      let score = 0;
+      score += Math.max(0, 200 - text.length);
+      if (node.tagName === 'BUTTON') score += 40;
+      if (node.className && /ut-sbc|challenge|tile|list/i.test(String(node.className))) score += 25;
+      scored.push({ node, score, text });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0]?.node || null;
+  }
+
+  async function clickByTokens(tokens, options = {}) {
+    const timeout = Math.max(1000, parseNumber(options.timeoutMs, 8000));
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      const node = findBestNodeByTokens(tokens, options);
+      if (node && clickNode(node, options.reason || tokens.join('+'))) return true;
+      await sleep(250);
+    }
+    return false;
+  }
+
+  function isDailyDetailsView() {
+    const txt = getNodeText(document.body);
+    return txt.includes('sbc') && (txt.includes('submit') || txt.includes('exchange squad') || txt.includes('smart builder'));
+  }
+
+  async function ensureDailyTypeOpened(typeKey, hints, timeoutMs) {
+    if (isDailyDetailsView() && getNodeText(document.body).includes(typeKey)) return true;
+    const openOk = await clickByTokens([typeKey], {
+      timeoutMs,
+      reason: `open-${typeKey}`,
+      requireAny: hints,
+      rejectTokens: ['settings', 'logs', 'auto trader'],
+    });
+    if (!openOk) return false;
+    await sleep(700);
+    return true;
+  }
+
+  async function runSingleDailyCycle(typeKey, config) {
+    const timeoutMs = Math.max(4000, parseNumber(config.stepTimeoutMs, 12000));
+    const actionDelay = Math.max(300, parseNumber(config.actionDelayMs, 900));
+    const hints = parseCsvTokens(config.tileHintCsv);
+
+    const opened = await ensureDailyTypeOpened(typeKey, hints, timeoutMs);
+    if (!opened) throw new Error(`could not open ${typeKey} daily SBC tile`);
+
+    const smartOk =
+      (await clickByTokens(['smart', 'builder'], { timeoutMs: 2500, reason: `smart-${typeKey}` })) ||
+      (await clickByTokens(['use', 'squad', 'builder'], { timeoutMs: 2500, reason: `builder-${typeKey}` })) ||
+      (await clickByTokens(['squad', 'builder'], { timeoutMs: 2500, reason: `builder-${typeKey}` }));
+    if (!smartOk) throw new Error(`smart builder button not found for ${typeKey}`);
+    await sleep(actionDelay);
+
+    // Handle builder popups/buttons if present.
+    await clickByTokens(['build'], { timeoutMs: 1800, reason: `build-${typeKey}` });
+    await clickByTokens(['generate'], { timeoutMs: 1800, reason: `generate-${typeKey}` });
+    await sleep(actionDelay);
+
+    const submitOk =
+      (await clickByTokens(['submit'], { timeoutMs, reason: `submit-${typeKey}` })) ||
+      (await clickByTokens(['exchange', 'squad'], { timeoutMs, reason: `exchange-${typeKey}` })) ||
+      (await clickByTokens(['complete', 'challenge'], { timeoutMs, reason: `complete-${typeKey}` }));
+    if (!submitOk) throw new Error(`submit button not found for ${typeKey}`);
+    await sleep(actionDelay);
+
+    // Confirmation dialogs.
+    await clickByTokens(['yes'], { timeoutMs: 2200, reason: `confirm-yes-${typeKey}` });
+    await clickByTokens(['submit'], { timeoutMs: 2200, reason: `confirm-submit-${typeKey}` });
+    await clickByTokens(['exchange'], { timeoutMs: 2200, reason: `confirm-exchange-${typeKey}` });
+    await sleep(actionDelay);
+
+    // Re-open same challenge via repeat when possible.
+    await clickByTokens(['repeat'], { timeoutMs: 4000, reason: `repeat-${typeKey}` });
+    await sleep(actionDelay);
+    return true;
+  }
+
+  async function dailyRunnerLoop() {
+    const run = state.dailyRuntime;
+    if (!run) return;
+    while (run.running) {
+      try {
+        let allDone = true;
+        for (const typeKey of run.types) {
+          if (!run.running) break;
+          const done = run.completed[typeKey] || 0;
+          if (done >= run.maxRepeats) continue;
+          allDone = false;
+          dailySetStatus(`Running ${typeKey} ${done}/${run.maxRepeats}`, 'ok');
+          await runSingleDailyCycle(typeKey, run.config);
+          run.completed[typeKey] = done + 1;
+          logLine(`daily: completed ${typeKey} ${run.completed[typeKey]}/${run.maxRepeats}`);
+          dailySetStatus(`Completed ${typeKey} ${run.completed[typeKey]}/${run.maxRepeats}`, 'ok');
+          await sleep(Math.max(300, parseNumber(run.config.actionDelayMs, 900)));
+        }
+
+        if (allDone) {
+          run.running = false;
+          dailySetStatus('Finished all selected daily SBCs', 'ok');
+          logLine('daily: run finished');
+          break;
+        }
+      } catch (err) {
+        logLine(`daily: loop error ${String(err)}`);
+        dailySetStatus(`Error: ${String(err)}`, 'error');
+        await sleep(1200);
+      }
+    }
+    if (state.dailyRuntime) state.dailyRuntime.running = false;
+  }
+
+  function startDailyRunner() {
+    const config = readDailyFields();
+    saveDailyConfig(config);
+    if (state.dailyRuntime?.running) {
+      dailySetStatus('Already running', 'warn');
+      return;
+    }
+    const types = parseCsvTokens(config.typesCsv).filter((t) => ['bronze', 'silver', 'gold'].includes(t));
+    if (!types.length) {
+      dailySetStatus('Types must include bronze/silver/gold', 'error');
+      return;
+    }
+    const maxRepeats = Math.max(1, Math.min(25, parseNumber(config.maxRepeats, 5)));
+    state.dailyRuntime = {
+      running: true,
+      config,
+      types,
+      maxRepeats,
+      completed: Object.fromEntries(types.map((t) => [t, 0])),
+    };
+    logLine(`daily: start types=${types.join(',')} repeats=${maxRepeats}`);
+    dailySetStatus('Starting...', 'info');
+    dailyRunnerLoop().catch((err) => {
+      logLine(`daily: fatal error ${String(err)}`);
+      dailySetStatus(`Fatal: ${String(err)}`, 'error');
+      if (state.dailyRuntime) state.dailyRuntime.running = false;
+    });
+  }
+
+  function stopDailyRunner() {
+    if (state.dailyRuntime) state.dailyRuntime.running = false;
+    dailySetStatus('Stopping...', 'warn');
+  }
+
+  function ensureDailyPanel() {
+    if (!document.body) return;
+    if (state.dailyPanel && document.body.contains(state.dailyPanel)) return;
+
+    const panel = document.createElement('div');
+    panel.className = DAILY_PANEL_CLASS;
+    panel.innerHTML = `
+      <div class="pt-futgg-trader-header"><strong>Daily SBC Runner (Beta)</strong></div>
+      <div class="pt-futgg-trader-grid"></div>
+      <div class="pt-futgg-trader-actions"></div>
+      <div class="pt-futgg-trader-status" data-kind="info">Idle</div>
+    `;
+
+    const grid = panel.querySelector('.pt-futgg-trader-grid');
+    const actions = panel.querySelector('.pt-futgg-trader-actions');
+    const status = panel.querySelector('.pt-futgg-trader-status');
+
+    const fieldDefs = [
+      ['Target types CSV', 'typesCsv', 'text', 'bronze,silver,gold'],
+      ['Repeats per type', 'maxRepeats', 'number', '5'],
+      ['Action delay (ms)', 'actionDelayMs', 'number', '900'],
+      ['Step timeout (ms)', 'stepTimeoutMs', 'number', '12000'],
+      ['Tile hint tokens CSV', 'tileHintCsv', 'text', 'daily,upgrade'],
+    ];
+    const fields = {};
+    for (const [label, key, type, placeholder] of fieldDefs) {
+      const field = createField(label, key, type, placeholder);
+      grid.appendChild(field.wrap);
+      fields[key] = field.input;
+    }
+
+    const startBtn = document.createElement('button');
+    startBtn.type = 'button';
+    startBtn.textContent = 'Start';
+    startBtn.addEventListener('click', startDailyRunner);
+
+    const stopBtn = document.createElement('button');
+    stopBtn.type = 'button';
+    stopBtn.textContent = 'Stop';
+    stopBtn.addEventListener('click', stopDailyRunner);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', () => saveDailyConfig(readDailyFields()));
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', () => panel.classList.remove('open'));
+
+    actions.appendChild(startBtn);
+    actions.appendChild(stopBtn);
+    actions.appendChild(saveBtn);
+    actions.appendChild(closeBtn);
+
+    document.body.appendChild(panel);
+    state.dailyPanel = panel;
+    state.dailyFields = fields;
+    state.dailyStatus = status;
+    fillDailyFields(getDailyConfig());
+  }
+
+  function openDailyPanel() {
+    ensureDailyPanel();
+    if (!state.dailyPanel) return;
+    fillDailyFields(getDailyConfig());
+    state.dailyPanel.classList.add('open');
+  }
+
   function scoreFromCard(card) {
     const chip = card?.querySelector?.(`.${CHIP_CLASS}`);
     if (!chip) return -1;
@@ -1056,6 +1438,283 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const dir = sortDescending ? 'desc' : 'asc';
     setStatus(`sorted by FUT.GG ${dir}`, 'ok');
     logLine(`sort: applied direction=${dir} moved=${moved}`);
+  }
+
+  function parseSbcTileInfo(tile) {
+    if (!tile) return null;
+    const titleNode =
+      tile.querySelector('h1, h2, .tileTitle, .title, [class*="title"]') ||
+      tile.querySelector('[class*="name"]') ||
+      null;
+    const title = String(titleNode?.textContent || '').trim();
+    if (!title) return null;
+    const text = String(tile.textContent || '').replace(/\s+/g, ' ').trim();
+    const nodeTexts = Array.from(tile.querySelectorAll('*'))
+      .map((n) => String(n.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    const pickShortest = (arr) => {
+      if (!arr.length) return '';
+      arr.sort((a, b) => a.length - b.length);
+      return arr[0];
+    };
+    const repeatNodeText =
+      pickShortest(nodeTexts.filter((t) => /^repeatable\s*:\s*\d+\s*$/i.test(t))) ||
+      pickShortest(nodeTexts.filter((t) => /^repeatable\s*:\s*\d+\b/i.test(t)));
+    const completedNodeText =
+      pickShortest(nodeTexts.filter((t) => /^completed\s*\d+\s*times\s*$/i.test(t))) ||
+      pickShortest(nodeTexts.filter((t) => /^completed\s*\d+\s*times\b/i.test(t)));
+    // Fallback to full-tile text if dedicated label nodes are not present.
+    const repMatch = /repeatable\s*:\s*(\d{1,2})\b/i.exec(repeatNodeText || text);
+    const compMatch = /completed\s*(\d+)\s*times\b/i.exec(completedNodeText || text);
+    let repeatable = repMatch ? Number(repMatch[1]) : null;
+    let completed = compMatch ? Number(compMatch[1]) : 0;
+    if (Number.isFinite(repeatable) && repeatable > 99) {
+      const s = String(Math.trunc(repeatable));
+      repeatable = Number(s.slice(0, 2));
+      if (repeatable > 50) repeatable = Number(s.slice(0, 1));
+    }
+    if (!Number.isFinite(repeatable) || repeatable <= 0) repeatable = null;
+    if (!Number.isFinite(completed) || completed < 0) completed = 0;
+    // In this UI, "Repeatable: N" is the currently available remaining count.
+    // Do not subtract historical "Completed X times" from it.
+    const remaining = Number.isFinite(repeatable) ? Math.max(0, repeatable) : null;
+    const completedAll = Number.isFinite(remaining) ? remaining <= 0 : false;
+    return { title, repeatable, completed, remaining, completedAll };
+  }
+
+  function findSbcTiles() {
+    return Array.from(document.querySelectorAll('.ut-sbc-set-tile-view, .ut-sbc-challenge-tile-view, .ut-sbc-set-view .tile')).filter((x) =>
+      isVisible(x)
+    );
+  }
+
+  function findSbcTileByTitle(title) {
+    const want = normalize(title);
+    if (!want) return null;
+    const tiles = findSbcTiles();
+    for (const tile of tiles) {
+      const info = parseSbcTileInfo(tile);
+      if (!info) continue;
+      if (normalize(info.title) === want) return { tile, info };
+    }
+    return null;
+  }
+
+  function isSbcDetailLikeView() {
+    const txt = getNodeText(document.body);
+    return (
+      txt.includes('smart builder') ||
+      txt.includes('exchange squad') ||
+      txt.includes('submit') ||
+      txt.includes('squad rating')
+    );
+  }
+
+  function clickLikelyBackButton(reason = 'sbc-auto-back-icon') {
+    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a'));
+    let best = null;
+    let bestScore = -1;
+    for (const node of candidates) {
+      if (!isElementVisible(node) || isNodeDisabled(node)) continue;
+      const txt = String(node.textContent || '').trim().toLowerCase();
+      const cls = String(node.className || '').toLowerCase();
+      const aria = String(node.getAttribute?.('aria-label') || '').toLowerCase();
+      const title = String(node.getAttribute?.('title') || '').toLowerCase();
+      const rect = node.getBoundingClientRect?.();
+      let score = 0;
+      if (/back|previous/.test(cls)) score += 140;
+      if (txt.includes('back') || aria.includes('back') || title.includes('back')) score += 120;
+      if (txt === '' || txt === '<' || txt === '‹') score += 90;
+      if (rect && rect.top >= 0 && rect.top < 140) score += 40;
+      if (rect && rect.left >= 0 && rect.left < 120) score += 40;
+      if (txt.length > 0 && txt.length <= 2) score += 10;
+      if (score > bestScore) {
+        bestScore = score;
+        best = node;
+      }
+    }
+    if (best && bestScore >= 80) return clickNode(best, reason);
+    return false;
+  }
+
+  async function ensureSbcTileReady(title, timeoutMs = 10000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const match = findSbcTileByTitle(title);
+      if (match) return match;
+
+      // Most failures after first run happen because we are still inside challenge details.
+      if (isSbcDetailLikeView()) {
+        const wentBack =
+          clickLikelyBackButton(`sbc-auto-back-icon-${title}`) ||
+          (await clickByTokens(['back'], {
+            timeoutMs: 1200,
+            reason: `sbc-auto-back-${title}`,
+            rejectTokens: ['settings', 'logs'],
+          })) ||
+          (await clickByTokens(['challenges'], { timeoutMs: 1200, reason: `sbc-auto-challenges-${title}` })) ||
+          (await clickByTokens(['sbc'], { timeoutMs: 1200, reason: `sbc-auto-sbc-${title}` }));
+        if (wentBack) {
+          await sleep(700);
+          continue;
+        }
+      }
+
+      // Handle common post-submit popups that can block returning to list.
+      await clickByTokens(['continue'], { timeoutMs: 700, reason: `sbc-auto-continue-${title}` });
+      await clickByTokens(['ok'], { timeoutMs: 700, reason: `sbc-auto-ok-${title}` });
+      await sleep(350);
+    }
+    return null;
+  }
+
+  function getSbcAutoButtonHost(tile) {
+    if (!tile) return null;
+    return tile.querySelector('.sbc-status-container, .tileHeader, header, .ut-sbc-set-status-view') || tile;
+  }
+
+  async function clickSbcSmartBuilderAndSubmit(title, timeoutMs = 12000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const txt = String(document.body?.textContent || '').toLowerCase();
+      const atSbcView = txt.includes('smart builder') || txt.includes('exchange squad') || txt.includes('submit');
+      if (atSbcView) break;
+      const openTile = findBestNodeByTokens(
+        title
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((x) => x.length >= 3)
+          .slice(0, 3),
+        { rejectTokens: ['settings', 'logs', 'auto trader', 'daily sbc runner'] }
+      );
+      if (openTile) clickNode(openTile, `open-sbc-${title}`);
+      await sleep(350);
+    }
+
+    const smartOk =
+      (await clickByTokens(['smart', 'builder'], { timeoutMs: 3000, reason: `smart-${title}` })) ||
+      (await clickByTokens(['use', 'squad', 'builder'], { timeoutMs: 3000, reason: `builder-${title}` })) ||
+      (await clickByTokens(['squad', 'builder'], { timeoutMs: 3000, reason: `builder-${title}` }));
+    if (!smartOk) throw new Error('smart builder button not found');
+    await sleep(800);
+
+    await clickByTokens(['build'], { timeoutMs: 1800, reason: `build-${title}` });
+    await clickByTokens(['generate'], { timeoutMs: 1800, reason: `generate-${title}` });
+    await sleep(700);
+
+    const submitOk =
+      (await clickByTokens(['submit'], { timeoutMs: 7000, reason: `submit-${title}` })) ||
+      (await clickByTokens(['exchange', 'squad'], { timeoutMs: 7000, reason: `exchange-${title}` })) ||
+      (await clickByTokens(['complete', 'challenge'], { timeoutMs: 7000, reason: `complete-${title}` }));
+    if (!submitOk) throw new Error('submit button not found');
+    await sleep(700);
+
+    await clickByTokens(['yes'], { timeoutMs: 2000, reason: `confirm-yes-${title}` });
+    await clickByTokens(['submit'], { timeoutMs: 2000, reason: `confirm-submit-${title}` });
+    await clickByTokens(['exchange'], { timeoutMs: 2000, reason: `confirm-exchange-${title}` });
+    await sleep(900);
+
+    // Do not click generic "repeat" actions here; in this UI it can hit "Repeat Search"
+    // and move to a different challenge, which breaks multi-run automation.
+  }
+
+  async function runSbcAuto(title, requestedCount) {
+    const run = {
+      running: true,
+      title,
+      requestedCount,
+      completed: 0,
+    };
+    state.sbcAutoRun = run;
+    logLine(`sbc-auto: start title="${title}" target=${requestedCount}`);
+    setStatus(`auto running: ${title}`, 'ok');
+
+    while (run.running && run.completed < run.requestedCount) {
+      const match = await ensureSbcTileReady(title, 11000);
+      const tileNode = match?.tile || null;
+      const tileInfo = match?.info || null;
+
+      if (!tileNode || !tileInfo) {
+        logLine(`sbc-auto: stop - tile not found "${title}"`);
+        break;
+      }
+      if (tileInfo.completedAll || (Number.isFinite(tileInfo.remaining) && tileInfo.remaining <= 0)) {
+        logLine(`sbc-auto: stop - completed "${title}"`);
+        break;
+      }
+
+      try {
+        clickNode(tileNode, `open-tile-${title}`);
+        await sleep(600);
+        await clickSbcSmartBuilderAndSubmit(title, 14000);
+        run.completed += 1;
+        logLine(`sbc-auto: progress "${title}" ${run.completed}/${run.requestedCount}`);
+      } catch (err) {
+        logLine(`sbc-auto: stop on error "${title}" :: ${String(err)}`);
+        break;
+      }
+      await sleep(1200);
+    }
+
+    const done = run.completed;
+    const wanted = run.requestedCount;
+    state.sbcAutoRun = null;
+    logLine(`sbc-auto: finished "${title}" ${done}/${wanted}`);
+    setStatus(`auto done: ${title} ${done}/${wanted}`, 'ok');
+  }
+
+  function startSbcAutoForTile(tile) {
+    const info = parseSbcTileInfo(tile);
+    if (!info) return;
+    if (state.sbcAutoRun?.running) {
+      logLine('sbc-auto: already running');
+      return;
+    }
+    if (info.completedAll || (Number.isFinite(info.remaining) && info.remaining <= 0)) {
+      logLine(`sbc-auto: already completed "${info.title}"`);
+      return;
+    }
+    const maxCount = Number.isFinite(info.remaining) && info.remaining > 0 ? info.remaining : 1;
+    const raw = window.prompt(`Auto-complete "${info.title}" how many times? (max ${maxCount})`, String(maxCount));
+    if (raw == null) return;
+    const want = Math.max(1, Math.min(maxCount, parseNumber(raw, maxCount)));
+    runSbcAuto(info.title, want).catch((err) => logLine(`sbc-auto: fatal ${String(err)}`));
+  }
+
+  function ensureSbcAutoButtons() {
+    const tiles = findSbcTiles();
+    for (const tile of tiles) {
+      const info = parseSbcTileInfo(tile);
+      if (!info) continue;
+      let btn = tile.querySelector(`.${SBC_AUTO_BTN_CLASS}`);
+      if (btn && btn.dataset.ptFutggBuild !== BUILD_ID) {
+        btn.remove();
+        btn = null;
+      }
+      if (!btn) {
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = SBC_AUTO_BTN_CLASS;
+        btn.dataset.ptFutggBuild = BUILD_ID;
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          startSbcAutoForTile(tile);
+        });
+        const host = getSbcAutoButtonHost(tile);
+        host.appendChild(btn);
+      }
+      const runningThis = !!(state.sbcAutoRun?.running && normalize(state.sbcAutoRun.title) === normalize(info.title));
+      btn.disabled = runningThis || info.completedAll;
+      if (runningThis) {
+        btn.textContent = `Auto ${state.sbcAutoRun.completed}/${state.sbcAutoRun.requestedCount}`;
+      } else if (info.completedAll) {
+        btn.textContent = 'Auto Done';
+      } else {
+        const rem = Number.isFinite(info.remaining) ? info.remaining : '?';
+        btn.textContent = `Auto x${rem}`;
+      }
+    }
   }
 
   function ensureSelectSortHook() {
@@ -1126,7 +1785,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     for (const container of containers) {
       const text = (container.textContent || '').toLowerCase();
       if (!text.includes('setting') && !text.includes('paletools')) continue;
-      if (container.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`) && container.querySelector(`.${SETTINGS_TRADER_ITEM_CLASS}`)) continue;
+      if (
+        container.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`) &&
+        container.querySelector(`.${SETTINGS_TRADER_ITEM_CLASS}`) &&
+        container.querySelector(`.${SETTINGS_DAILY_ITEM_CLASS}`)
+      ) {
+        continue;
+      }
 
       const host = container.querySelector('.itemList, ul, .list, .ut-list-view, .ut-button-group') || container;
       const rowTemplate =
@@ -1175,6 +1840,29 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         });
         host.appendChild(traderItem);
         logLine('trader: injected Auto Trader item into settings menu');
+      }
+
+      if (!container.querySelector(`.${SETTINGS_DAILY_ITEM_CLASS}`)) {
+        let dailyItem;
+        if (rowTemplate) {
+          dailyItem = rowTemplate.cloneNode(true);
+          dailyItem.classList.add(SETTINGS_DAILY_ITEM_CLASS);
+          dailyItem.removeAttribute?.('id');
+          dailyItem.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+          setPrimaryText(dailyItem, 'Daily SBC Runner');
+        } else {
+          dailyItem = document.createElement('button');
+          dailyItem.type = 'button';
+          dailyItem.className = `${DROPDOWN_ITEM_CLASS} ${SETTINGS_DAILY_ITEM_CLASS}`;
+          dailyItem.textContent = 'Daily SBC Runner';
+        }
+        dailyItem.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openDailyPanel();
+        });
+        host.appendChild(dailyItem);
+        logLine('daily: injected Daily SBC Runner item into settings menu');
       }
     }
   }
@@ -1269,6 +1957,30 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         host.appendChild(traderItem);
       }
       logLine('trader: injected Auto Trader item by cloning Paletools row');
+    }
+
+    if (!host.querySelector(`.${SETTINGS_DAILY_ITEM_CLASS}`)) {
+      const dailyItem = rowTemplate.cloneNode(true);
+      dailyItem.classList.add(SETTINGS_DAILY_ITEM_CLASS);
+      dailyItem.removeAttribute?.('id');
+      dailyItem.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+      setRowLabelStrict(dailyItem, 'Daily SBC Runner');
+      const onOpenDaily = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        openDailyPanel();
+      };
+      dailyItem.addEventListener('click', onOpenDaily, true);
+      dailyItem.addEventListener('touchend', onOpenDaily, true);
+      dailyItem.addEventListener('pointerup', onOpenDaily, true);
+
+      if (rowTemplate.parentNode) {
+        rowTemplate.parentNode.insertBefore(dailyItem, rowTemplate.nextSibling);
+      } else {
+        host.appendChild(dailyItem);
+      }
+      logLine('daily: injected Daily SBC Runner item by cloning Paletools row');
     }
   }
 
@@ -2678,6 +3390,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     ensureListSortHook();
     ensureSettingsLogsHook();
     ensurePaletoolsSettingsLogsHook();
+    ensureSbcAutoButtons();
 
     if (!state.loaded || !cards.length) return;
     const totalMatched = visibleWithChip + matched;
@@ -2775,6 +3488,21 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         font-size: 12px;
         font-weight: 700;
       }
+      .${SBC_AUTO_BTN_CLASS} {
+        margin-top: 6px;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid rgba(78, 230, 235, 0.7);
+        background: rgba(20, 26, 33, 0.92);
+        color: #4ee6eb;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .${SBC_AUTO_BTN_CLASS}[disabled] {
+        opacity: 0.55;
+        cursor: default;
+      }
       .${LOG_PANEL_CLASS} {
         display: none;
         position: fixed;
@@ -2806,6 +3534,22 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         overflow: auto;
       }
       .${TRADER_PANEL_CLASS}.open { display: block; }
+      .${DAILY_PANEL_CLASS} {
+        display: none;
+        position: fixed;
+        left: 8px;
+        right: 8px;
+        top: 8px;
+        bottom: 8px;
+        z-index: 2147483647;
+        border: 1px solid rgba(78, 230, 235, 0.75);
+        border-radius: 8px;
+        background: rgba(12, 15, 20, 0.98);
+        color: #d7dde6;
+        padding: 10px;
+        overflow: auto;
+      }
+      .${DAILY_PANEL_CLASS}.open { display: block; }
       .pt-futgg-trader-header {
         margin-bottom: 8px;
         color: #4ee6eb;
@@ -2938,11 +3682,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       childList: true,
       subtree: true,
     });
+    addCleanup(() => observer.disconnect());
 
-    setInterval(scanCards, 1500);
-    setInterval(() => {
+    const scanIntervalId = setInterval(scanCards, 1500);
+    const playerIntervalId = setInterval(() => {
       scanPlayerDetails().catch((err) => logLine(`player: scan failed ${String(err)}`));
     }, 1500);
+    addCleanup(() => clearInterval(scanIntervalId));
+    addCleanup(() => clearInterval(playerIntervalId));
     scanCards();
     scanPlayerDetails().catch((err) => logLine(`player: scan failed ${String(err)}`));
   }

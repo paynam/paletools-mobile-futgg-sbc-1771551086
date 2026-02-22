@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-26';
+  const BUILD_ID = 'pt-futgg-20260222-27';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -1678,6 +1678,21 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       ['_viewmodel', '_item'],
       ['_viewmodel', 'itemData'],
       ['_viewmodel', '_itemData'],
+      // FC26 details view often stores the selected card here.
+      ['_itemDetailController', 'childViewControllers', 0, 'childViewControllers', 0, 'item'],
+      ['_itemDetailController', 'childViewControllers', 0, 'childViewControllers', 0, '_item'],
+      ['_itemDetailController', 'childViewControllers', 0, 'currentController', 'item'],
+      ['_itemDetailController', 'childViewControllers', 0, 'currentController', '_item'],
+      ['_itemDetailController', 'currentController', 'item'],
+      ['_itemDetailController', 'currentController', '_item'],
+      ['itemDetailController', 'childViewControllers', 0, 'childViewControllers', 0, 'item'],
+      ['itemDetailController', 'childViewControllers', 0, 'childViewControllers', 0, '_item'],
+      ['itemDetailController', 'currentController', 'item'],
+      ['itemDetailController', 'currentController', '_item'],
+      ['_itemDetailsController', 'childViewControllers', 0, 'childViewControllers', 0, 'item'],
+      ['_itemDetailsController', 'childViewControllers', 0, 'childViewControllers', 0, '_item'],
+      ['_itemDetailsController', 'currentController', 'item'],
+      ['_itemDetailsController', 'currentController', '_item'],
     ];
 
     const candidates = [];
@@ -1694,6 +1709,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         if (!eaId) continue;
         const playerName = pickPlayerNameFromObject(item);
         let score = 100;
+        const pathStr = path.join('.');
+        if (/itemDetailController/i.test(pathStr)) score += 35;
+        if (/childViewControllers\.0\.childViewControllers\.0\.(item|_item)$/i.test(pathStr)) score += 80;
+        if (/currentController\.(item|_item)$/i.test(pathStr)) score += 30;
         if (playerName) score += 20;
         if (displayedName && playerName) score += Math.round(100 * nameSimilarityScore(displayedName, playerName));
         candidates.push({
@@ -1738,6 +1757,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         if (eaId) {
           const nodeName = pickPlayerNameFromObject(node);
           let score = 20;
+          if (/itemDetailController/i.test(cur.path)) score += 60;
+          if (/childViewControllers\[0\]\.childViewControllers\[0\]\.(item|_item)$/i.test(cur.path)) score += 120;
+          if (/viewmodel\._collection\[\d+\]\._item$/i.test(cur.path)) score += 20;
+          if (/_squad\._players\[\d+\]\._item$/i.test(cur.path)) score -= 15;
+          if (/_squad\._manager\._item$/i.test(cur.path)) score -= 30;
           if (nodeName) score += 20;
           if (displayedName && nodeName) score += Math.round(100 * nameSimilarityScore(displayedName, nodeName));
           if (Number(node?.rating) > 0) score += 5;
@@ -1779,11 +1803,24 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       const sim = displayedName && c.playerName ? nameSimilarityScore(displayedName, c.playerName) : 0;
       if (sim >= 0.6) return true;
       if (detailLikePathRe.test(source) && c.score >= 95) return true;
-      if (!displayedName && detailLikePathRe.test(source) && c.score >= 105) return true;
+      if (!displayedName && detailLikePathRe.test(source) && c.score >= 80) return true;
+      if (!displayedName && c.score >= 170) return true;
       return false;
     });
     if (!filtered.length) {
-      logLine(`player: controller candidates rejected total=${candidates.length} displayedName=${displayedName || 'n/a'}`);
+      const topRejected = candidates
+        .slice()
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3)
+        .map((x) => `${x.eaId}@${x.score}:${x.source}`)
+        .join(' || ');
+      const rejectKey = `${displayedName || 'n/a'}:${topRejected}`;
+      if (state.lastRejectLogKey !== rejectKey) {
+        state.lastRejectLogKey = rejectKey;
+        logLine(
+          `player: controller candidates rejected total=${candidates.length} displayedName=${displayedName || 'n/a'} top=${topRejected || 'none'}`
+        );
+      }
       return null;
     }
     filtered.sort((a, b) => b.score - a.score);

@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260222-31';
+  const BUILD_ID = 'pt-futgg-20260222-32';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -1573,6 +1573,68 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return tile.querySelector('.sbc-status-container, .tileHeader, header, .ut-sbc-set-status-view') || tile;
   }
 
+  function stopTapPropagation(e) {
+    if (!e) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+  }
+
+  function bindSbcAutoButtonHandlers(btn, tile) {
+    if (!btn || !tile) return;
+    let touchArmed = false;
+    let lastTapAt = 0;
+    const triggerAuto = (e) => {
+      const now = Date.now();
+      if (now - lastTapAt < 350) {
+        stopTapPropagation(e);
+        return;
+      }
+      lastTapAt = now;
+      stopTapPropagation(e);
+      startSbcAutoForTile(tile);
+    };
+
+    btn.addEventListener(
+      'touchstart',
+      (e) => {
+        touchArmed = true;
+        stopTapPropagation(e);
+      },
+      { passive: false, capture: true }
+    );
+    btn.addEventListener(
+      'touchend',
+      (e) => {
+        if (!touchArmed) return;
+        touchArmed = false;
+        triggerAuto(e);
+      },
+      { passive: false, capture: true }
+    );
+    btn.addEventListener(
+      'touchcancel',
+      () => {
+        touchArmed = false;
+      },
+      { passive: true, capture: true }
+    );
+    btn.addEventListener(
+      'pointerdown',
+      (e) => {
+        stopTapPropagation(e);
+      },
+      { passive: false, capture: true }
+    );
+    btn.addEventListener(
+      'click',
+      (e) => {
+        triggerAuto(e);
+      },
+      { passive: false, capture: true }
+    );
+  }
+
   async function clickSbcSmartBuilderAndSubmit(title, timeoutMs = 12000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -1696,11 +1758,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         btn.type = 'button';
         btn.className = SBC_AUTO_BTN_CLASS;
         btn.dataset.ptFutggBuild = BUILD_ID;
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          startSbcAutoForTile(tile);
-        });
+        bindSbcAutoButtonHandlers(btn, tile);
         const host = getSbcAutoButtonHost(tile);
         host.appendChild(btn);
       }
@@ -3493,6 +3551,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       .${SBC_AUTO_BTN_CLASS} {
         margin-top: 6px;
         padding: 6px 8px;
+        position: relative;
+        z-index: 6;
+        pointer-events: auto;
+        touch-action: manipulation;
         border-radius: 6px;
         border: 1px solid rgba(78, 230, 235, 0.7);
         background: rgba(20, 26, 33, 0.92);

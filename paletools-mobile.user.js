@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260222-30';
+  const BUILD_ID = 'pt-futgg-20260222-31';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -3413,6 +3413,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         right: 6px;
         bottom: 6px;
         z-index: 2;
+        pointer-events: none;
         display: inline-flex;
         padding: 2px 6px;
         border-radius: 999px;
@@ -3432,6 +3433,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         right: 12px;
         bottom: 12px;
         z-index: 2147483647;
+        pointer-events: none;
         max-width: 70vw;
         padding: 6px 10px;
         border-radius: 8px;

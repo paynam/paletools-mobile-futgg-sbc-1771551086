@@ -15,7 +15,7 @@
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260221-26';
+  const BUILD_ID = 'pt-futgg-20260221-27';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
   const FUTGG_PROXY_URLS = [
@@ -90,6 +90,8 @@
     lastRejectLogKey: '',
     lastControllerRootsLogKey: '',
     lastGoodPlayerCtx: null,
+    activeSbcSortMode: null,
+    lastSbcSortFingerprint: '',
   };
 
   function logLine(message) {
@@ -995,6 +997,32 @@
     return -1;
   }
 
+  function getSortModeFromValue(value) {
+    if (value === SORT_DESC_VALUE) return 'desc';
+    if (value === SORT_ASC_VALUE) return 'asc';
+    return null;
+  }
+
+  function rememberSbcSortMode(mode) {
+    state.activeSbcSortMode = mode;
+    if (!mode) state.lastSbcSortFingerprint = '';
+  }
+
+  function getSbcSortFingerprint(cards) {
+    const list = Array.from(cards || []);
+    if (!list.length) return '0';
+    const parts = [];
+    const max = Math.min(list.length, 30);
+    for (let i = 0; i < max; i += 1) {
+      const card = list[i];
+      const titleNode = findTitleNode(card);
+      const title = normalize(titleNode?.textContent || '');
+      const score = scoreFromCard(card);
+      parts.push(`${title}:${score}`);
+    }
+    return `${list.length}|${parts.join('|')}`;
+  }
+
   function sortVisibleSbcCards(sortDescending = true) {
     const selectors = [
       '.ut-sbc-set-tile-view',
@@ -1033,6 +1061,14 @@
     const dir = sortDescending ? 'desc' : 'asc';
     setStatus(`sorted by FUT.GG ${dir}`, 'ok');
     logLine(`sort: applied direction=${dir} moved=${moved}`);
+    state.lastSbcSortFingerprint = getSbcSortFingerprint(cards);
+  }
+
+  function reapplyActiveSbcSortIfNeeded(cards) {
+    if (state.activeSbcSortMode !== 'desc' && state.activeSbcSortMode !== 'asc') return;
+    const fingerprint = getSbcSortFingerprint(cards);
+    if (!fingerprint || fingerprint === state.lastSbcSortFingerprint) return;
+    sortVisibleSbcCards(state.activeSbcSortMode === 'desc');
   }
 
   function ensureSelectSortHook() {
@@ -1056,9 +1092,12 @@
       }
 
       select.addEventListener('change', () => {
-        if (select.value === SORT_DESC_VALUE) sortVisibleSbcCards(true);
-        if (select.value === SORT_ASC_VALUE) sortVisibleSbcCards(false);
+        const mode = getSortModeFromValue(select.value);
+        rememberSbcSortMode(mode);
+        if (mode === 'desc') sortVisibleSbcCards(true);
+        if (mode === 'asc') sortVisibleSbcCards(false);
       });
+      rememberSbcSortMode(getSortModeFromValue(select.value));
       select.dataset.ptFutggSortHooked = '1';
       logLine('sort: hooked native select sort dropdown');
     }
@@ -1080,13 +1119,19 @@
       descBtn.type = 'button';
       descBtn.className = DROPDOWN_ITEM_CLASS;
       descBtn.textContent = 'FUT.GG Rating (High to Low)';
-      descBtn.addEventListener('click', () => sortVisibleSbcCards(true));
+      descBtn.addEventListener('click', () => {
+        rememberSbcSortMode('desc');
+        sortVisibleSbcCards(true);
+      });
 
       const ascBtn = document.createElement('button');
       ascBtn.type = 'button';
       ascBtn.className = DROPDOWN_ITEM_CLASS;
       ascBtn.textContent = 'FUT.GG Rating (Low to High)';
-      ascBtn.addEventListener('click', () => sortVisibleSbcCards(false));
+      ascBtn.addEventListener('click', () => {
+        rememberSbcSortMode('asc');
+        sortVisibleSbcCards(false);
+      });
 
       host.appendChild(descBtn);
       host.appendChild(ascBtn);
@@ -2618,6 +2663,7 @@
     ensureListSortHook();
     ensureSettingsLogsHook();
     ensurePaletoolsSettingsLogsHook();
+    reapplyActiveSbcSortIfNeeded(cards);
 
     if (!state.loaded || !cards.length) return;
     const totalMatched = visibleWithChip + matched;

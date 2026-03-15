@@ -53,6 +53,54 @@ Maintain and evolve the Paletools mobile bookmark build plus FUT.GG SBC automati
   - Tile label (`Auto xN`)
   - Prompt max (`max N`)
 
+## Browser Debug Workflow
+
+- Use full Chrome, not a lightweight/headless substitute, when the user needs to log in.
+- Reuse a persistent Chrome profile so EA login survives restarts.
+  - Example used in this repo: `.chrome-profile-fc`
+- If the site breaks when DevTools opens because of `debugger`, avoid the visible DevTools UI and use the remote debugging socket instead.
+- When testing mobile-only behavior, emulate an actual phone viewport and user agent.
+  - Example that worked: iPhone Safari, `390x844`, DPR `3`, touch enabled.
+- Verify the page is actually in phone mode before drawing conclusions.
+  - Useful signal: `body` contains `phone`.
+- Reinject the latest local script into the active logged-in tab after code changes.
+  - Do not assume the old bookmark payload or prior injection matches local source.
+- If the bookmark page has not been refreshed yet, direct injection from local file/network is acceptable for debugging, but final validation must use the regenerated build.
+
+## Mobile SBC Debug Notes
+
+- On mobile SBC overview pages, the visible pen/edit button can be required before Smart Builder appears.
+- Do not rely only on token search in the DOM for mobile SBC actions.
+  - Prefer inspecting the active EA controller/view objects when DOM text is missing.
+- Useful controller path:
+  - `getAppMain() -> root controller -> current tab bar -> current navigation controller -> current SBC controller`
+- Relevant mobile controllers observed in this flow:
+  - `UTSBCSquadOverviewViewController`
+  - `UTSBCSquadDetailPanelViewController`
+- Useful controller actions observed in this flow:
+  - Overview detail open: `_eDetailsButtonSelected`
+  - Detail smart builder: `_eSmartBuilderSelected`
+  - Navigation back: `eBackButtonTapped` / `_eBackButtonTapped`
+  - Overview submit: `_eSubmitSelected`
+- If a visible button click does nothing, inspect the control's tap bindings.
+  - Many EA controls expose target/action bindings under `_targets._collection.tap`
+- For Daily Bronze style flows on mobile, the working sequence was:
+  1. Open SBC tile
+  2. Open detail panel / pen button
+  3. Trigger Smart Builder
+  4. Go back to overview
+  5. Submit from overview
+
+## End-to-End Validation Notes
+
+- When testing auto-run prompts, restore any temporary `window.prompt` override after the test.
+  - Otherwise later taps can look broken because they silently reuse the forced value.
+- Validate the actual post-run state, not just logs.
+  - Example checks:
+  - `Auto x5 -> Auto x4`
+  - `Completed 0 times -> Completed 1 times`
+- If the auto button appears to open the SBC instead of prompting, first rule out prompt overrides and stale injected handlers before changing event code.
+
 ## Known Gotchas
 
 - Stale handlers after reinjection can cause mismatched behavior.
@@ -70,4 +118,3 @@ A change is done only when:
 - Build IDs synchronized.
 - Behavior validated in UI for the changed path.
 - Commit and push completed.
-

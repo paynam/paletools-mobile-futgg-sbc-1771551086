@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260222-32';
+  const BUILD_ID = 'pt-futgg-20260222-34';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -1154,12 +1154,41 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return !!attrDisabled;
   }
 
+  function dispatchTapSequence(node) {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect?.();
+    const clientX = rect ? rect.left + rect.width / 2 : 1;
+    const clientY = rect ? rect.top + rect.height / 2 : 1;
+    const pointerInit = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX,
+      clientY,
+      pointerId: 1,
+      pointerType: 'touch',
+      isPrimary: true,
+    };
+    const mouseInit = { bubbles: true, cancelable: true, composed: true, clientX, clientY, view: window };
+    try {
+      if (typeof PointerEvent === 'function') {
+        node.dispatchEvent(new PointerEvent('pointerdown', pointerInit));
+        node.dispatchEvent(new PointerEvent('pointerup', pointerInit));
+      }
+      node.dispatchEvent(new MouseEvent('mousedown', mouseInit));
+      node.dispatchEvent(new MouseEvent('mouseup', mouseInit));
+      node.dispatchEvent(new MouseEvent('click', mouseInit));
+      node.click?.();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function clickNode(node, reason = '') {
     if (!node || !isElementVisible(node) || isNodeDisabled(node)) return false;
     try {
-      node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-      node.click();
+      if (!dispatchTapSequence(node)) return false;
       if (reason) logLine(`daily: click ${reason}`);
       return true;
     } catch {
@@ -1223,6 +1252,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     const opened = await ensureDailyTypeOpened(typeKey, hints, timeoutMs);
     if (!opened) throw new Error(`could not open ${typeKey} daily SBC tile`);
+
+    await ensureSbcBuilderActionsVisible(2500, typeKey);
 
     const smartOk =
       (await clickByTokens(['smart', 'builder'], { timeoutMs: 2500, reason: `smart-${typeKey}` })) ||
@@ -1479,6 +1510,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   function parseSbcTileInfo(tile) {
     if (!tile) return null;
     const titleNode =
+      findTitleNode(tile) ||
       tile.querySelector('h1, h2, .tileTitle, .title, [class*="title"]') ||
       tile.querySelector('[class*="name"]') ||
       null;
@@ -1502,6 +1534,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     // Fallback to full-tile text if dedicated label nodes are not present.
     const repMatch = /repeatable\s*:\s*(\d{1,2})\b/i.exec(repeatNodeText || text);
     const compMatch = /completed\s*(\d+)\s*times\b/i.exec(completedNodeText || text);
+    const progressMatch = /(\d+)\s*\/\s*(\d+)\s*sbc/i.exec(text);
     let repeatable = repMatch ? Number(repMatch[1]) : null;
     let completed = compMatch ? Number(compMatch[1]) : 0;
     if (Number.isFinite(repeatable) && repeatable > 99) {
@@ -1513,9 +1546,193 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (!Number.isFinite(completed) || completed < 0) completed = 0;
     // In this UI, "Repeatable: N" is the currently available remaining count.
     // Do not subtract historical "Completed X times" from it.
-    const remaining = Number.isFinite(repeatable) ? Math.max(0, repeatable) : null;
+    let remaining = Number.isFinite(repeatable) ? Math.max(0, repeatable) : null;
+    if (remaining == null && /non-repeatable/i.test(text)) {
+      remaining = completed > 0 || (progressMatch && Number(progressMatch[1]) >= Number(progressMatch[2])) ? 0 : 1;
+    }
+    if (remaining == null && /\brepeatable\b/i.test(text) && completed >= 0) {
+      remaining = 1;
+    }
     const completedAll = Number.isFinite(remaining) ? remaining <= 0 : false;
     return { title, repeatable, completed, remaining, completedAll };
+  }
+
+  function findVisibleEditSbcButton() {
+    const candidates = Array.from(
+      document.querySelectorAll(
+        'button.squad-edit-icon, .squad-edit-icon, .ut-iteminfochange-button-control, .chevron-btn, [class*="edit"]'
+      )
+    );
+    for (const node of candidates) {
+      if (!isElementVisible(node) || isNodeDisabled(node)) continue;
+      return node;
+    }
+    return null;
+  }
+
+  function getActiveSbcControllerContext() {
+    const app = typeof getAppMain === 'function' ? getAppMain() : null;
+    const root = app?.getRootViewController?.() || null;
+    const tabBar =
+      root?.currentController ||
+      root?.childViewControllers?.find((node) => String(node?.constructor?.name || '') === 'UTGameTabBarController') ||
+      null;
+    const nav =
+      tabBar?.currentController ||
+      tabBar?.childViewControllers?.find((node) => {
+        const currentName = String(node?.currentController?.constructor?.name || '');
+        if (currentName.includes('SBC')) return true;
+        const children = Array.isArray(node?.childViewControllers) ? node.childViewControllers : [];
+        return children.some((child) => String(child?.constructor?.name || '').includes('SBC'));
+      }) ||
+      null;
+    const controller = nav?.currentController || null;
+    return { app, root, tabBar, nav, controller };
+  }
+
+  function invokeControlTapAction(control) {
+    const taps = control?._targets?._collection?.tap;
+    if (!Array.isArray(taps) || !taps.length) return false;
+    for (const binding of taps) {
+      const target = binding?.target || control;
+      const action = binding?.action;
+      try {
+        if (typeof action === 'function') {
+          action.call(target);
+          return true;
+        }
+        if (typeof action === 'string' && typeof target?.[action] === 'function') {
+          target[action]();
+          return true;
+        }
+      } catch {}
+    }
+    return false;
+  }
+
+  async function openSbcDetailPanel(timeoutMs = 2500, title = '') {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const { controller } = getActiveSbcControllerContext();
+      const ctor = String(controller?.constructor?.name || '');
+      if (ctor === 'UTSBCSquadDetailPanelViewController') return true;
+      let opened = false;
+      if (ctor === 'UTSBCSquadOverviewViewController') {
+        if (typeof controller?._eDetailsButtonSelected === 'function') {
+          try {
+            controller._eDetailsButtonSelected();
+            opened = true;
+          } catch {}
+        }
+        if (!opened) opened = invokeControlTapAction(controller?.view?._detailsButton);
+      }
+      if (!opened) {
+        const editBtn = findVisibleEditSbcButton();
+        if (editBtn) opened = clickNode(editBtn, title ? `open-editor-${title}` : 'open-editor');
+      } else {
+        logLine(`daily: click open-editor-${title || 'sbc'}`);
+      }
+      await sleep(opened ? 450 : 250);
+    }
+    return false;
+  }
+
+  async function ensureSbcBuilderActionsVisible(timeoutMs = 2500, title = '') {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const { controller } = getActiveSbcControllerContext();
+      if (String(controller?.constructor?.name || '') === 'UTSBCSquadDetailPanelViewController') return true;
+      const text = getNodeText(document.body);
+      if (text.includes('smart builder') || text.includes('squad builder')) return true;
+      const opened = await openSbcDetailPanel(700, title);
+      if (!opened) return false;
+    }
+    return false;
+  }
+
+  async function clickSbcSmartBuilder(title, timeoutMs = 5000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const { controller } = getActiveSbcControllerContext();
+      if (String(controller?.constructor?.name || '') === 'UTSBCSquadDetailPanelViewController') {
+        if (typeof controller?._eSmartBuilderSelected === 'function') {
+          try {
+            controller._eSmartBuilderSelected();
+            logLine(`daily: click smart-${title}`);
+            await sleep(1800);
+            return true;
+          } catch {}
+        }
+        if (invokeControlTapAction(controller?.view?.getSmartBuilderButton?.() || controller?.view?._smartBuilderButton)) {
+          logLine(`daily: click smart-${title}`);
+          await sleep(1800);
+          return true;
+        }
+      }
+      const clicked =
+        (await clickByTokens(['smart', 'builder'], { timeoutMs: 1200, reason: `smart-${title}` })) ||
+        (await clickByTokens(['use', 'squad', 'builder'], { timeoutMs: 1200, reason: `builder-${title}` })) ||
+        (await clickByTokens(['squad', 'builder'], { timeoutMs: 1200, reason: `builder-${title}` }));
+      if (clicked) {
+        await sleep(1800);
+        return true;
+      }
+      await sleep(250);
+    }
+    return false;
+  }
+
+  async function returnToSbcOverview(timeoutMs = 5000, title = '') {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const { nav, controller } = getActiveSbcControllerContext();
+      const ctor = String(controller?.constructor?.name || '');
+      if (ctor === 'UTSBCSquadOverviewViewController') return true;
+      let wentBack = false;
+      if (ctor === 'UTSBCSquadDetailPanelViewController') {
+        try {
+          if (typeof nav?.eBackButtonTapped === 'function') {
+            nav.eBackButtonTapped();
+            wentBack = true;
+          } else if (typeof nav?._eBackButtonTapped === 'function') {
+            nav._eBackButtonTapped();
+            wentBack = true;
+          }
+        } catch {}
+      }
+      if (!wentBack) wentBack = clickLikelyBackButton(`sbc-auto-back-icon-${title}`) || false;
+      if (wentBack) {
+        logLine(`daily: click back-${title || 'sbc'}`);
+        await sleep(850);
+        continue;
+      }
+      await sleep(250);
+    }
+    return false;
+  }
+
+  async function submitSbcFromOverview(title, timeoutMs = 5000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const { controller } = getActiveSbcControllerContext();
+      if (String(controller?.constructor?.name || '') === 'UTSBCSquadOverviewViewController') {
+        if (typeof controller?._eSubmitSelected === 'function') {
+          try {
+            controller._eSubmitSelected();
+            logLine(`daily: click submit-${title}`);
+            await sleep(700);
+            return true;
+          } catch {}
+        }
+      }
+      const submitOk =
+        (await clickByTokens(['submit'], { timeoutMs: 1200, reason: `submit-${title}` })) ||
+        (await clickByTokens(['exchange', 'squad'], { timeoutMs: 1200, reason: `exchange-${title}` })) ||
+        (await clickByTokens(['complete', 'challenge'], { timeoutMs: 1200, reason: `complete-${title}` }));
+      if (submitOk) return true;
+      await sleep(250);
+    }
+    return false;
   }
 
   function findSbcTiles() {
@@ -1689,21 +1906,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       await sleep(350);
     }
 
-    const smartOk =
-      (await clickByTokens(['smart', 'builder'], { timeoutMs: 3000, reason: `smart-${title}` })) ||
-      (await clickByTokens(['use', 'squad', 'builder'], { timeoutMs: 3000, reason: `builder-${title}` })) ||
-      (await clickByTokens(['squad', 'builder'], { timeoutMs: 3000, reason: `builder-${title}` }));
+    await ensureSbcBuilderActionsVisible(2500, title);
+
+    const smartOk = await clickSbcSmartBuilder(title, 5000);
     if (!smartOk) throw new Error('smart builder button not found');
-    await sleep(800);
+    const overviewOk = await returnToSbcOverview(5000, title);
+    if (!overviewOk) throw new Error('sbc overview not found after smart builder');
 
-    await clickByTokens(['build'], { timeoutMs: 1800, reason: `build-${title}` });
-    await clickByTokens(['generate'], { timeoutMs: 1800, reason: `generate-${title}` });
-    await sleep(700);
-
-    const submitOk =
-      (await clickByTokens(['submit'], { timeoutMs: 7000, reason: `submit-${title}` })) ||
-      (await clickByTokens(['exchange', 'squad'], { timeoutMs: 7000, reason: `exchange-${title}` })) ||
-      (await clickByTokens(['complete', 'challenge'], { timeoutMs: 7000, reason: `complete-${title}` }));
+    const submitOk = await submitSbcFromOverview(title, 5000);
     if (!submitOk) throw new Error('submit button not found');
     await sleep(700);
 

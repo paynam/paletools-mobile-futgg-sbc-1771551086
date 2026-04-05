@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-43';
+  const BUILD_ID = 'pt-futgg-20260405-44';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -129,6 +129,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     squadExportDebugSeen: new Set(),
     playerMenuNode: null,
     playerCache: new Map(),
+    futCoreDataByGame: new Map(),
+    futCoreDataLoadByGame: new Map(),
+    playerDefinitionCacheByGame: new Map(),
+    playerDefinitionLoadByGame: new Map(),
     chemStyleNamesByGame: new Map(),
     chemStyleNamesLoadByGame: new Map(),
     lastPlayerScanAt: 0,
@@ -1824,6 +1828,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return localized || String(leagueId);
   }
 
+  function isReadableExportText(value) {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    if (/^\d+$/.test(text)) return false;
+    if (/^\*(global|search)\./i.test(text)) return false;
+    return true;
+  }
+
   function getNationalityLabel(item) {
     const direct = pickFirstString([
       item?.nationName,
@@ -1867,14 +1879,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       item?._staticData?.rarityLabel,
       item?._staticData?.rarityName,
       item?._staticData?.rarity,
-      item?.subtype,
-      item?._subtype,
-      item?.itemData?.subtype,
-      item?._staticData?.subtype,
       item?.itemType,
       item?.typeName,
     ]);
-    if (direct) return direct;
+    if (isReadableExportText(direct)) return direct;
     if (item?.rareflag === true || item?.itemData?.rareflag === true) return 'Rare';
     if (item?.rareflag === false || item?.itemData?.rareflag === false) return 'Common';
     return '';
@@ -1923,6 +1931,73 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return rows;
   }
 
+  function getReadableDefinitionRarity(definition) {
+    const direct = pickFirstString([
+      definition?.rarity?.name,
+      definition?.rarityName,
+      definition?.rarity?.alternateName,
+      definition?.itemRarity?.name,
+    ]);
+    return isReadableExportText(direct) ? direct : '';
+  }
+
+  async function enrichSquadExportRows(rows, candidate, game = DEFAULT_GAME) {
+    if (!Array.isArray(rows) || !rows.length) return rows;
+
+    const coreData = await ensureFutCoreData(game);
+    const itemDefs = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const slot = candidate?.players?.[i];
+      const item = extractItemFromSquadSlot(slot);
+      const defId = pickEaIdFromObject(item);
+      itemDefs.push(
+        item && defId && (!isReadableExportText(rows[i]?.rarity) || !isReadableExportText(rows[i]?.league) || !isReadableExportText(rows[i]?.nationality))
+          ? ensurePlayerItemDefinition(game, defId)
+          : Promise.resolve(null)
+      );
+    }
+    const definitions = await Promise.all(itemDefs);
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const definition = definitions[i];
+      if (!row || !definition) {
+        if (row && !isReadableExportText(row.league)) {
+          const leagueId = Number(row.league);
+          if (Number.isFinite(leagueId) && coreData?.leagueByEaId?.has(leagueId)) row.league = coreData.leagueByEaId.get(leagueId);
+        }
+        continue;
+      }
+
+      if (!isReadableExportText(row.rarity)) {
+        const rarity = getReadableDefinitionRarity(definition);
+        if (rarity) row.rarity = rarity;
+      }
+
+      if (!isReadableExportText(row.league)) {
+        const leagueName = pickFirstString([definition?.league?.name, definition?.leagueName]);
+        if (isReadableExportText(leagueName)) {
+          row.league = leagueName;
+        } else {
+          const leagueEaId = Number(definition?.league?.eaId || definition?.leagueEaId || row.league);
+          if (Number.isFinite(leagueEaId) && coreData?.leagueByEaId?.has(leagueEaId)) row.league = coreData.leagueByEaId.get(leagueEaId);
+        }
+      }
+
+      if (!isReadableExportText(row.nationality)) {
+        const nationName = pickFirstString([definition?.nation?.name, definition?.nationName, definition?.nationality]);
+        if (isReadableExportText(nationName)) {
+          row.nationality = nationName;
+        } else {
+          const nationEaId = Number(definition?.nation?.eaId || definition?.nationEaId || row.nationality);
+          if (Number.isFinite(nationEaId) && coreData?.nationByEaId?.has(nationEaId)) row.nationality = coreData.nationByEaId.get(nationEaId);
+        }
+      }
+    }
+
+    return rows;
+  }
+
   function isWeakSquadExportSource(source) {
     return /featuredSquads|featured|message|objective|news|tile/i.test(String(source || ''));
   }
@@ -1944,14 +2019,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return score;
   }
 
-  function buildSquadExportPayload() {
+  async function buildSquadExportPayload() {
     const candidates = [getActiveSquadFromUiRoots(), getActiveSquadFromControllers(), getActiveSquadFromRecentPayloads()].filter(Boolean);
     if (!candidates.length) return null;
 
     let bestPayload = null;
     let bestScore = -Infinity;
     for (const candidate of candidates) {
-      const rows = normalizeSquadExportRows(candidate);
+      const rows = await enrichSquadExportRows(normalizeSquadExportRows(candidate), candidate, DEFAULT_GAME);
       if (!rows.length) continue;
       const squadName = pickFirstString([candidate.squad?.name, candidate.squad?._name, candidate.squad?.squadName]);
       const formation = pickFirstString([candidate.squad?.formationName, candidate.squad?.formation]);
@@ -2003,10 +2078,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     state.squadExportPre.textContent = payload ? JSON.stringify(payload, null, 2) : '';
   }
 
-  function refreshSquadExport() {
+  async function refreshSquadExport() {
     squadExportSetStatus('Resolving active squad...', 'info');
     try {
-      const payload = buildSquadExportPayload();
+      const payload = await buildSquadExportPayload();
       if (!payload) {
         renderSquadExportPanel(null);
         squadExportSetStatus('Active squad not detected on the current runtime state', 'error');
@@ -4044,9 +4119,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return node;
   }
 
-  async function ensureChemStyleNames(game) {
-    if (state.chemStyleNamesByGame.has(game)) return state.chemStyleNamesByGame.get(game);
-    if (state.chemStyleNamesLoadByGame.has(game)) return state.chemStyleNamesLoadByGame.get(game);
+  function getPlayerDefinitionCache(game) {
+    if (!state.playerDefinitionCacheByGame.has(game)) state.playerDefinitionCacheByGame.set(game, new Map());
+    return state.playerDefinitionCacheByGame.get(game);
+  }
+
+  async function ensureFutCoreData(game) {
+    if (state.futCoreDataByGame.has(game)) return state.futCoreDataByGame.get(game);
+    if (state.futCoreDataLoadByGame.has(game)) return state.futCoreDataLoadByGame.get(game);
 
     const promise = withHardTimeout(
       requestJson(`https://www.fut.gg/api/fut/${game}/fut-core-data/`),
@@ -4054,7 +4134,91 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       'Core data request'
     )
       .then((payload) => {
-        const rows = Array.isArray(payload?.data?.chemistryStyles) ? payload.data.chemistryStyles : [];
+        const data = payload?.data || {};
+        const leagueByEaId = new Map();
+        const nationByEaId = new Map();
+        const rarityByEaId = new Map();
+
+        const leagues = Array.isArray(data?.leagues) ? data.leagues : [];
+        for (const row of leagues) {
+          const eaId = Number(row?.eaId);
+          const name = String(row?.name || '').trim();
+          if (Number.isFinite(eaId) && name) leagueByEaId.set(eaId, name);
+        }
+
+        const nations = Array.isArray(data?.nations) ? data.nations : [];
+        for (const row of nations) {
+          const eaId = Number(row?.eaId);
+          const name = String(row?.name || '').trim();
+          if (Number.isFinite(eaId) && name) nationByEaId.set(eaId, name);
+        }
+
+        const rarities = Array.isArray(data?.rarities) ? data.rarities : [];
+        for (const row of rarities) {
+          const eaId = Number(row?.eaId);
+          const name = String(row?.name || row?.alternateName || '').trim();
+          if (Number.isFinite(eaId) && name) rarityByEaId.set(eaId, name);
+        }
+
+        const chemistryStyleRows = Array.isArray(data?.chemistryStyles) ? data.chemistryStyles : [];
+        const mapped = { leagueByEaId, nationByEaId, rarityByEaId, chemistryStyleRows };
+        state.futCoreDataByGame.set(game, mapped);
+        return mapped;
+      })
+      .catch((err) => {
+        logLine(`squad: core data load failed game=${game} :: ${String(err)}`);
+        const fallback = { leagueByEaId: new Map(), nationByEaId: new Map(), rarityByEaId: new Map(), chemistryStyleRows: [] };
+        state.futCoreDataByGame.set(game, fallback);
+        return fallback;
+      })
+      .finally(() => {
+        state.futCoreDataLoadByGame.delete(game);
+      });
+
+    state.futCoreDataLoadByGame.set(game, promise);
+    return promise;
+  }
+
+  async function ensurePlayerItemDefinition(game, defId) {
+    const numericDefId = Number(defId);
+    if (!Number.isFinite(numericDefId) || numericDefId < 10000) return null;
+
+    const cache = getPlayerDefinitionCache(game);
+    if (cache.has(numericDefId)) return cache.get(numericDefId);
+
+    const loadKey = `${game}:${numericDefId}`;
+    if (state.playerDefinitionLoadByGame.has(loadKey)) return state.playerDefinitionLoadByGame.get(loadKey);
+
+    const promise = withHardTimeout(
+      requestJson(`https://www.fut.gg/api/fut/player-item-definitions/${game}/${numericDefId}/?`),
+      REQUEST_HARD_TIMEOUT_MS,
+      'Player item definition request'
+    )
+      .then((payload) => {
+        const data = payload?.data || null;
+        cache.set(numericDefId, data);
+        return data;
+      })
+      .catch((err) => {
+        logLine(`squad: player definition load failed defId=${numericDefId} :: ${String(err)}`);
+        cache.set(numericDefId, null);
+        return null;
+      })
+      .finally(() => {
+        state.playerDefinitionLoadByGame.delete(loadKey);
+      });
+
+    state.playerDefinitionLoadByGame.set(loadKey, promise);
+    return promise;
+  }
+
+  async function ensureChemStyleNames(game) {
+    if (state.chemStyleNamesByGame.has(game)) return state.chemStyleNamesByGame.get(game);
+    if (state.chemStyleNamesLoadByGame.has(game)) return state.chemStyleNamesLoadByGame.get(game);
+
+    const promise = ensureFutCoreData(game)
+      .then((coreData) => {
+        const rows = Array.isArray(coreData?.chemistryStyleRows) ? coreData.chemistryStyleRows : [];
         const map = new Map();
         for (const row of rows) {
           const id = Number(row?.id);

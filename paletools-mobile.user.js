@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-38';
+  const BUILD_ID = 'pt-futgg-20260405-39';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -2009,29 +2009,31 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     const lockButton = getSquadLockButton();
     if (lockButton) {
-      const exportButton = lockButton.cloneNode(true);
-      exportButton.classList.add(SQUAD_EXPORT_ENTRY_CLASS);
+      const exportButton = document.createElement(lockButton.tagName === 'A' ? 'a' : 'button');
+      if (exportButton.tagName === 'BUTTON') exportButton.type = 'button';
+      exportButton.className = `${lockButton.className || ''} ${SQUAD_EXPORT_ENTRY_CLASS}`.trim();
+      exportButton.textContent = 'Export Active Squad';
       exportButton.removeAttribute('disabled');
       exportButton.dataset.ptFutggExport = '1';
-      exportButton.querySelectorAll('[data-ut-event], [data-ut-custom-event]').forEach((node) => {
-        node.removeAttribute('data-ut-event');
-        node.removeAttribute('data-ut-custom-event');
-      });
-      if (exportButton.matches('input')) {
-        exportButton.value = 'Export Active Squad';
-      } else {
-        const textNode = Array.from(exportButton.querySelectorAll('*')).find((node) => isLockPlayersText(node.textContent || '')) || exportButton;
-        if (textNode === exportButton) exportButton.textContent = 'Export Active Squad';
-        else textNode.textContent = 'Export Active Squad';
-      }
+      exportButton.href = '#';
       const cleanClick = (e) => {
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         openSquadExportPanel();
+        return false;
       };
-      exportButton.onclick = cleanClick;
-      exportButton.addEventListener('click', cleanClick);
-      lockButton.insertAdjacentElement('afterend', exportButton);
+      exportButton.addEventListener('click', cleanClick, true);
+      exportButton.addEventListener('pointerup', (e) => e.stopPropagation(), true);
+      exportButton.addEventListener('touchend', (e) => e.stopPropagation(), true);
+
+      const wrapper = document.createElement('span');
+      wrapper.className = SQUAD_EXPORT_ENTRY_CLASS;
+      wrapper.style.display = 'inline-flex';
+      wrapper.style.alignItems = 'center';
+      wrapper.style.marginLeft = '8px';
+      wrapper.appendChild(exportButton);
+      lockButton.insertAdjacentElement('afterend', wrapper);
       logLine('squad: injected Export Active Squad button beside Lock / Unlock Players');
       return;
     }

@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>Paletools Bookmark Drag Link</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.4; }
@@ -19,7 +22,6 @@
     }
     .muted { color: #666; }
   </style>
-  <script src="./mobile-bookmark.prod.js?v=pt-futgg-20260405-42"></script>
 </head>
 <body>
   <h1>Drag This To Bookmarks Bar</h1>
@@ -29,11 +31,25 @@
   <p class="muted" id="status">Preparing bookmark...</p>
 
   <script>
-    (function () {
-      var build = 'pt-futgg-20260405-42';
-      var code = (window.paletools && window.paletools['paletools-mobile-custom']) || '';
+    (async function () {
+      var build = 'pt-futgg-20260405-43';
+      var key = '';
+      try {
+        key = new URLSearchParams(window.location.search).get('k') || '';
+      } catch (e) {}
       var link = document.getElementById('pt-bookmark');
       var status = document.getElementById('status');
+      var scriptUrl = './mobile-bookmark.prod.js?v=' + encodeURIComponent(build) + (key ? '&k=' + encodeURIComponent(key) : '');
+      try {
+        var resp = await fetch(scriptUrl, { cache: 'no-store' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        var text = await resp.text();
+        (0, eval)(text);
+      } catch (err) {
+        status.textContent = 'Failed to load bookmark payload: ' + String(err);
+        return;
+      }
+      var code = (window.paletools && window.paletools['paletools-mobile-custom']) || '';
       if (!code) {
         status.textContent = 'Failed to load bookmark payload.';
         return;

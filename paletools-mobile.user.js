@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-40';
+  const BUILD_ID = 'pt-futgg-20260405-41';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -126,6 +126,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     squadExportPre: null,
     squadExportData: null,
     squadExportCsv: '',
+    squadExportDebugSeen: new Set(),
     playerMenuNode: null,
     playerCache: new Map(),
     chemStyleNamesByGame: new Map(),
@@ -1745,7 +1746,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   }
 
   function getSquadSlotLabel(slot, item, idx, total) {
-    const direct = pickFirstString([
+    const rawCandidates = [
       slot?.squadPosition,
       slot?.slotLabel,
       slot?._slotLabel,
@@ -1764,8 +1765,31 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       item?.formationPosition,
       item?.position,
       item?.preferredPosition,
-    ]);
-    if (direct) return String(direct).toUpperCase();
+    ];
+    for (const candidate of rawCandidates) {
+      if (!candidate) continue;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (text && text !== '[object Object]' && !/^\d+$/.test(text)) return text.toUpperCase();
+      }
+      if (typeof candidate === 'number') continue;
+      if (typeof candidate === 'object') {
+        const nested = pickFirstString([
+          candidate.label,
+          candidate.name,
+          candidate.text,
+          candidate.abbr,
+          candidate.shortName,
+          candidate.slotLabel,
+          candidate.slotName,
+          candidate.positionLabel,
+          candidate.position,
+          candidate.role,
+          candidate.englishName,
+        ]);
+        if (nested && nested !== '[object Object]' && !/^\d+$/.test(String(nested))) return String(nested).toUpperCase();
+      }
+    }
 
     if (idx < 11) return `STARTER ${idx + 1}`;
     if (idx < 18) return `BENCH ${idx - 10}`;
@@ -1794,7 +1818,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       item?.itemData?.league?.id,
       item?._staticData?.league?.id,
     ]);
-    return leagueId ? String(leagueId) : '';
+    if (!leagueId) return '';
+    const localized =
+      resolveLocalizationKey(`global.leagueFull.${leagueId}`) || resolveLocalizationKey(`global.leagueabbr5.${leagueId}`);
+    return localized || String(leagueId);
   }
 
   function getNationalityLabel(item) {
@@ -1821,7 +1848,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       item?.itemData?.nation?.id,
       item?._staticData?.nation?.id,
     ]);
-    return nationId ? String(nationId) : '';
+    if (!nationId) return '';
+    const localized =
+      resolveLocalizationKey(`search.nationName.nation${nationId}`) ||
+      resolveLocalizationKey(`global.nationFull.${nationId}`) ||
+      resolveLocalizationKey(`global.countryFull.${nationId}`);
+    return localized || String(nationId);
   }
 
   function getRarityLabel(item) {
@@ -1849,7 +1881,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       const slot = players[i];
       const item = extractItemFromSquadSlot(slot);
       if (!item) continue;
-      rows.push({
+      const row = {
         slotIndex: i + 1,
         squadPosition: getSquadSlotLabel(slot, item, i, players.length),
         playerName: pickPlayerNameFromObject(item) || `Player ${i + 1}`,
@@ -1857,7 +1889,26 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         rarity: getRarityLabel(item),
         league: getLeagueLabel(item),
         nationality: getNationalityLabel(item),
-      });
+      };
+      const missing = [];
+      if (!row.playerName || /^Player \d+$/.test(row.playerName)) missing.push('name');
+      if (!row.rarity) missing.push('rarity');
+      if (!row.league || /^\d+$/.test(String(row.league))) missing.push('league');
+      if (!row.nationality || /^\d+$/.test(String(row.nationality))) missing.push('nationality');
+      if (!row.squadPosition || row.squadPosition === '[OBJECT OBJECT]' || /^\d+$/.test(String(row.squadPosition))) missing.push('position');
+      if (missing.length) {
+        const debugKey = `${candidate?.source || 'unknown'}:${row.slotIndex}:${missing.join(',')}`;
+        if (!state.squadExportDebugSeen.has(debugKey)) {
+          state.squadExportDebugSeen.add(debugKey);
+          logLine(
+            `squad: row debug slot=${row.slotIndex} missing=${missing.join('|')} ` +
+              `defId=${pickEaIdFromObject(item) || 0} rating=${row.rating || 0} ` +
+              `slotKeys=${describeObjectKeys(slot)} itemKeys=${describeObjectKeys(item)} ` +
+              `itemDataKeys=${describeObjectKeys(item?.itemData)} staticKeys=${describeObjectKeys(item?._staticData)}`
+          );
+        }
+      }
+      rows.push(row);
     }
     return rows;
   }
@@ -3347,14 +3398,62 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   function pickPlayerNameFromObject(obj) {
     if (!obj || typeof obj !== 'object') return null;
-    const first = String(obj.firstName || obj.cleanedFirstName || '').trim();
-    const last = String(obj.lastName || obj.cleanedLastName || '').trim();
-    const common = String(obj.commonName || obj.cleanedCommonName || '').trim();
-    const full =
-      [first, last].filter(Boolean).join(' ') ||
-      common ||
-      String(obj.name || obj.displayName || obj.playerName || '').trim();
-    return full || null;
+    const sources = [
+      obj,
+      obj.itemData,
+      obj._itemData,
+      obj._staticData,
+      obj.staticData,
+      obj.player,
+      obj._player,
+      obj.definition,
+      obj._definition,
+    ].filter(Boolean);
+    for (const src of sources) {
+      const first = String(src.firstName || src.cleanedFirstName || '').trim();
+      const last = String(src.lastName || src.cleanedLastName || '').trim();
+      const common = String(src.commonName || src.cleanedCommonName || '').trim();
+      const full =
+        [first, last].filter(Boolean).join(' ') ||
+        common ||
+        String(src.fullName || src.name || src.displayName || src.playerName || src.label || '').trim();
+      if (full && full !== '[object Object]') return full;
+    }
+    return null;
+  }
+
+  function getLocalizationService() {
+    try {
+      return services?.Localization || services?.localization || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveLocalizationKey(key) {
+    if (!key) return '';
+    const service = getLocalizationService();
+    const methods = ['localize', 'getString', 'translate', 'get', 'lookup', 'text'];
+    for (const method of methods) {
+      try {
+        const fn = service?.[method];
+        if (typeof fn !== 'function') continue;
+        const value = String(fn.call(service, key) || '').trim();
+        if (value && value !== key && !/^undefined|null$/i.test(value)) return value;
+      } catch {}
+    }
+    return '';
+  }
+
+  function describeObjectKeys(obj, max = 10) {
+    if (!obj || typeof obj !== 'object') return '';
+    try {
+      return Object.keys(obj)
+        .slice(0, max)
+        .join('|');
+    } catch {
+      return '';
+    }
   }
 
   function getDisplayedPlayerName(detailRoot) {

@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-36';
+  const BUILD_ID = 'pt-futgg-20260405-37';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -132,6 +132,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     chemStyleNamesLoadByGame: new Map(),
     lastPlayerScanAt: 0,
     recentPlayerIds: [],
+    recentSquadPayloads: [],
     networkSnifferInstalled: false,
     lastPlayerDebugKey: '',
     lastControllerLogKey: '',
@@ -1456,7 +1457,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   function extractSquadPlayersArray(obj) {
     if (!obj || typeof obj !== 'object') return null;
-    const candidates = [
+
+    const directArrays = [
+      obj,
       obj._players,
       obj.players,
       obj.playerSlots,
@@ -1467,12 +1470,41 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       obj._lineup,
       obj.squadPlayers,
       obj._squadPlayers,
+      obj.items,
+      obj._items,
+      obj.cards,
+      obj._cards,
+      obj.members,
+      obj._members,
+      obj.entries,
+      obj._entries,
+      obj.club,
+      obj._club,
     ];
-    for (const candidate of candidates) {
+    for (const candidate of directArrays) {
       if (!Array.isArray(candidate) || !candidate.length) continue;
       const useful = candidate.filter((entry) => extractItemFromSquadSlot(entry));
       if (useful.length >= 5) return candidate;
     }
+
+    const grouped = [
+      [obj.starters, obj.bench, obj.reserves],
+      [obj._starters, obj._bench, obj._reserves],
+      [obj.startingXI, obj.subs, obj.reserves],
+      [obj._startingXI, obj._subs, obj._reserves],
+      [obj.lineup, obj.bench, obj.reserves],
+    ];
+    for (const parts of grouped) {
+      const merged = [];
+      for (const part of parts) {
+        if (!Array.isArray(part) || !part.length) continue;
+        merged.push(...part);
+      }
+      if (!merged.length) continue;
+      const useful = merged.filter((entry) => extractItemFromSquadSlot(entry));
+      if (useful.length >= 5) return merged;
+    }
+
     return null;
   }
 
@@ -1794,7 +1826,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   }
 
   function buildSquadExportPayload() {
-    const candidate = getActiveSquadFromUiRoots() || getActiveSquadFromControllers();
+    const candidate = getActiveSquadFromUiRoots() || getActiveSquadFromRecentPayloads() || getActiveSquadFromControllers();
     if (!candidate) return null;
     const rows = normalizeSquadExportRows(candidate);
     if (!rows.length) return null;
@@ -1846,7 +1878,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (!payload) {
         renderSquadExportPanel(null);
         squadExportSetStatus('Active squad not detected on the current runtime state', 'error');
-        logLine('squad: active squad not detected');
+        logLine(
+          `squad: active squad not detected uiNodes=${getSquadViewNodes().length} recentPayloads=${(state.recentSquadPayloads || []).length} controllerRoots=${getControllerRoots().length}`
+        );
         return;
       }
       renderSquadExportPanel(payload);
@@ -2966,6 +3000,71 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (state.recentPlayerIds.length > 30) state.recentPlayerIds.length = 30;
   }
 
+
+  function addRecentSquadPayload(payload, source) {
+    if (!payload || typeof payload !== 'object') return;
+    const players = extractSquadPlayersArray(payload);
+    if (!players || players.filter((entry) => extractItemFromSquadSlot(entry)).length < 5) return;
+    const row = { payload, source, ts: Date.now(), size: players.length };
+    state.recentSquadPayloads.unshift(row);
+    if (state.recentSquadPayloads.length > 12) state.recentSquadPayloads.length = 12;
+  }
+
+  function extractRecentSquadPayloadFromJsonLike(value, source) {
+    const seen = new WeakSet();
+    const queue = [{ node: value, path: 'root', depth: 0 }];
+    let visited = 0;
+    while (queue.length && visited < 500) {
+      const cur = queue.shift();
+      const node = cur?.node;
+      const path = cur?.path || 'root';
+      const depth = cur?.depth || 0;
+      if (!node || typeof node !== 'object') continue;
+      if (seen.has(node)) continue;
+      seen.add(node);
+      visited += 1;
+
+      const players = extractSquadPlayersArray(node);
+      if (players && players.filter((entry) => extractItemFromSquadSlot(entry)).length >= 5) {
+        addRecentSquadPayload(node, `${source}:${path}`);
+        return;
+      }
+
+      if (depth >= 5) continue;
+      if (Array.isArray(node)) {
+        const lim = Math.min(node.length, 24);
+        for (let i = 0; i < lim; i += 1) {
+          const child = node[i];
+          if (child && typeof child === 'object') queue.push({ node: child, path: `${path}[${i}]`, depth: depth + 1 });
+        }
+        continue;
+      }
+
+      for (const key of Object.keys(node)) {
+        if (!key || key.startsWith('__')) continue;
+        const child = node[key];
+        if (child && typeof child === 'object') queue.push({ node: child, path: `${path}.${key}`, depth: depth + 1 });
+      }
+    }
+  }
+
+  function getActiveSquadFromRecentPayloads() {
+    const now = Date.now();
+    const fresh = (state.recentSquadPayloads || []).filter((row) => now - Number(row?.ts || 0) < 30000);
+    if (!fresh.length) return null;
+    fresh.sort((a, b) => b.ts - a.ts || b.size - a.size);
+    const best = fresh[0];
+    const players = extractSquadPlayersArray(best.payload);
+    if (!players) return null;
+    logLine(`squad: recent payload players=${players.length} source=${best.source}`);
+    return {
+      squad: best.payload,
+      players,
+      source: `recent:${best.source}`,
+      score: players.length * 10,
+    };
+  }
+
   function extractEaIdsFromText(text) {
     const out = [];
     const re = /\b(\d{6,9})\b/g;
@@ -3055,6 +3154,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
                       const body = JSON.parse(t);
                       const ids = extractEaIdsFromJsonLike(body);
                       for (const id of ids) addRecentPlayerId(id, 'fetch-body');
+                      extractRecentSquadPayloadFromJsonLike(body, 'fetch-body');
+                      extractRecentSquadPayloadFromJsonLike(body, 'fetch-body');
                     })
                     .catch(() => {});
                 } catch {}
@@ -3096,6 +3197,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
               const body = JSON.parse(text);
               const ids = extractEaIdsFromJsonLike(body);
               for (const id of ids) addRecentPlayerId(id, 'xhr-body');
+              extractRecentSquadPayloadFromJsonLike(body, 'xhr-body');
             } catch {}
           });
         } catch {}

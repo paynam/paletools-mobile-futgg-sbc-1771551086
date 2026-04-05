@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260222-34';
+  const BUILD_ID = 'pt-futgg-20260405-35';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -55,10 +55,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const SETTINGS_LOG_ITEM_CLASS = 'pt-futgg-settings-log-item';
   const SETTINGS_TRADER_ITEM_CLASS = 'pt-futgg-settings-trader-item';
   const SETTINGS_DAILY_ITEM_CLASS = 'pt-futgg-settings-daily-item';
+  const SETTINGS_SQUAD_EXPORT_ITEM_CLASS = 'pt-futgg-settings-squad-export-item';
   const SBC_AUTO_BTN_CLASS = 'pt-futgg-sbc-auto-btn';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
   const TRADER_PANEL_CLASS = 'pt-futgg-trader-panel';
   const DAILY_PANEL_CLASS = 'pt-futgg-daily-panel';
+  const SQUAD_EXPORT_PANEL_CLASS = 'pt-futgg-squad-export-panel';
   const DROPDOWN_ITEM_CLASS = 'pt-futgg-sort-item';
   const SORT_DESC_VALUE = '__pt_futgg_desc__';
   const SORT_ASC_VALUE = '__pt_futgg_asc__';
@@ -118,6 +120,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     dailyStatus: null,
     dailyConfig: null,
     dailyRuntime: null,
+    squadExportPanel: null,
+    squadExportStatus: null,
+    squadExportPre: null,
+    squadExportData: null,
+    squadExportCsv: '',
     playerMenuNode: null,
     playerCache: new Map(),
     chemStyleNamesByGame: new Map(),
@@ -283,6 +290,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     } catch (err) {
       logLine(`daily: config save failed ${String(err)}`);
     }
+  }
+
+  function squadExportSetStatus(text, kind = 'info') {
+    if (!state.squadExportStatus) return;
+    state.squadExportStatus.dataset.kind = kind;
+    state.squadExportStatus.textContent = text;
   }
 
   function traderSetStatus(text, kind = 'info') {
@@ -1424,6 +1437,400 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     state.dailyPanel.classList.add('open');
   }
 
+  function pickFirstString(values) {
+    for (const value of values) {
+      const text = String(value || '').trim();
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function pickFirstNumber(values, min = 0) {
+    for (const value of values) {
+      const num = Number(value);
+      if (Number.isFinite(num) && num >= min) return num;
+    }
+    return null;
+  }
+
+  function extractSquadPlayersArray(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    const candidates = [
+      obj._players,
+      obj.players,
+      obj.playerSlots,
+      obj._playerSlots,
+      obj.slots,
+      obj._slots,
+      obj.lineup,
+      obj._lineup,
+      obj.squadPlayers,
+      obj._squadPlayers,
+    ];
+    for (const candidate of candidates) {
+      if (!Array.isArray(candidate) || !candidate.length) continue;
+      const useful = candidate.filter((entry) => extractItemFromSquadSlot(entry));
+      if (useful.length >= 5) return candidate;
+    }
+    return null;
+  }
+
+  function extractItemFromSquadSlot(slot) {
+    if (!slot || typeof slot !== 'object') return null;
+    const candidates = [
+      slot._item,
+      slot.item,
+      slot._player,
+      slot.player,
+      slot.itemData,
+      slot._itemData,
+      slot.playerItem,
+      slot._playerItem,
+      slot.card,
+      slot._card,
+    ];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== 'object') continue;
+      if (pickEaIdFromObject(candidate) || pickPlayerNameFromObject(candidate)) return candidate;
+    }
+    if (pickEaIdFromObject(slot) || pickPlayerNameFromObject(slot)) return slot;
+    return null;
+  }
+
+  function getActiveSquadFromControllers() {
+    const roots = getControllerRoots();
+    const candidates = [];
+    const seen = new WeakSet();
+    const goodPathRe = /(currentcontroller|presented|active|selected|squad|lineup|pitch|overview|club|details)/i;
+    const badPathRe = /(message|objective|news|store|pack|market|transfer|sbc|banner|inbox|tile)/i;
+
+    const addCandidate = (squad, path, source) => {
+      const players = extractSquadPlayersArray(squad);
+      if (!players) return;
+      const starters = players.filter((entry) => extractItemFromSquadSlot(entry)).length;
+      if (starters < 5) return;
+      let score = starters * 10;
+      if (goodPathRe.test(path)) score += 80;
+      if (badPathRe.test(path) && !/squad/i.test(path)) score -= 100;
+      if (Number(squad?.formation) > 0 || String(squad?.formationName || '').trim()) score += 25;
+      if (squad?._manager || squad?.manager) score += 15;
+      candidates.push({
+        squad,
+        players,
+        source: `${source}:${path}`,
+        score,
+      });
+    };
+
+    for (const rootWrap of roots) {
+      const root = rootWrap?.node;
+      if (!root || typeof root !== 'object') continue;
+      const queue = [{ node: root, path: rootWrap.source, depth: 0 }];
+      let visited = 0;
+      const MAX_VISIT = 900;
+      const MAX_DEPTH = 6;
+
+      while (queue.length && visited < MAX_VISIT) {
+        const cur = queue.shift();
+        const node = cur?.node;
+        const path = cur?.path || rootWrap.source;
+        const depth = cur?.depth || 0;
+        if (!node || typeof node !== 'object') continue;
+        if (seen.has(node)) continue;
+        seen.add(node);
+        visited += 1;
+
+        const directPlayers = extractSquadPlayersArray(node);
+        if (directPlayers) addCandidate(node, path, 'controller');
+
+        if (node._squad && typeof node._squad === 'object') addCandidate(node._squad, `${path}._squad`, 'controller');
+        if (node.squad && typeof node.squad === 'object') addCandidate(node.squad, `${path}.squad`, 'controller');
+        if (node._viewmodel?._squad && typeof node._viewmodel._squad === 'object') {
+          addCandidate(node._viewmodel._squad, `${path}._viewmodel._squad`, 'controller');
+        }
+
+        if (depth >= MAX_DEPTH) continue;
+        for (const key of Object.keys(node)) {
+          if (!key || key.startsWith('__')) continue;
+          const value = node[key];
+          if (!value || typeof value !== 'object') continue;
+          if (Array.isArray(value)) {
+            const lim = Math.min(value.length, 16);
+            for (let i = 0; i < lim; i += 1) {
+              const child = value[i];
+              if (child && typeof child === 'object') queue.push({ node: child, path: `${path}.${key}[${i}]`, depth: depth + 1 });
+            }
+          } else {
+            queue.push({ node: value, path: `${path}.${key}`, depth: depth + 1 });
+          }
+        }
+      }
+    }
+
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+    logLine(`squad: resolved players=${best.players.length} source=${best.source} score=${best.score}`);
+    return best;
+  }
+
+  function getSquadSlotLabel(slot, item, idx, total) {
+    const direct = pickFirstString([
+      slot?.squadPosition,
+      slot?.slotLabel,
+      slot?._slotLabel,
+      slot?.slotName,
+      slot?._slotName,
+      slot?.positionLabel,
+      slot?._positionLabel,
+      slot?.formationPosition,
+      slot?._formationPosition,
+      slot?.position,
+      slot?._position,
+      slot?.role,
+      slot?._role,
+      slot?.assignment,
+      slot?._assignment,
+      item?.formationPosition,
+      item?.position,
+      item?.preferredPosition,
+    ]);
+    if (direct) return String(direct).toUpperCase();
+
+    if (idx < 11) return `STARTER ${idx + 1}`;
+    if (idx < 18) return `BENCH ${idx - 10}`;
+    if (idx < total) return `RESERVE ${idx - 17}`;
+    return `SLOT ${idx + 1}`;
+  }
+
+  function getLeagueLabel(item) {
+    const direct = pickFirstString([
+      item?.leagueName,
+      item?.league,
+      item?.itemData?.leagueName,
+      item?.itemData?.league,
+      item?._staticData?.leagueName,
+      item?._staticData?.league,
+      item?.league?.name,
+      item?.itemData?.league?.name,
+      item?._staticData?.league?.name,
+    ]);
+    if (direct) return direct;
+    const leagueId = pickFirstNumber([
+      item?.leagueId,
+      item?.itemData?.leagueId,
+      item?._staticData?.leagueId,
+      item?.league?.id,
+      item?.itemData?.league?.id,
+      item?._staticData?.league?.id,
+    ]);
+    return leagueId ? String(leagueId) : '';
+  }
+
+  function getNationalityLabel(item) {
+    const direct = pickFirstString([
+      item?.nationName,
+      item?.nationality,
+      item?.nation,
+      item?.country,
+      item?.itemData?.nationName,
+      item?.itemData?.nationality,
+      item?.itemData?.nation,
+      item?._staticData?.nationName,
+      item?._staticData?.nationality,
+      item?.nation?.name,
+      item?.itemData?.nation?.name,
+      item?._staticData?.nation?.name,
+    ]);
+    if (direct) return direct;
+    const nationId = pickFirstNumber([
+      item?.nationId,
+      item?.itemData?.nationId,
+      item?._staticData?.nationId,
+      item?.nation?.id,
+      item?.itemData?.nation?.id,
+      item?._staticData?.nation?.id,
+    ]);
+    return nationId ? String(nationId) : '';
+  }
+
+  function getRarityLabel(item) {
+    const direct = pickFirstString([
+      item?.rarityLabel,
+      item?.rarityName,
+      item?.rarity,
+      item?.itemData?.rarityLabel,
+      item?.itemData?.rarityName,
+      item?.itemData?.rarity,
+      item?._staticData?.rarityLabel,
+      item?._staticData?.rarityName,
+      item?._staticData?.rarity,
+    ]);
+    if (direct) return direct;
+    if (item?.rareflag === true || item?.itemData?.rareflag === true) return 'Rare';
+    if (item?.rareflag === false || item?.itemData?.rareflag === false) return 'Common';
+    return '';
+  }
+
+  function normalizeSquadExportRows(candidate) {
+    const rows = [];
+    const players = candidate?.players || [];
+    for (let i = 0; i < players.length; i += 1) {
+      const slot = players[i];
+      const item = extractItemFromSquadSlot(slot);
+      if (!item) continue;
+      rows.push({
+        slotIndex: i + 1,
+        squadPosition: getSquadSlotLabel(slot, item, i, players.length),
+        playerName: pickPlayerNameFromObject(item) || `Player ${i + 1}`,
+        rating: pickFirstNumber([item?.rating, item?.overall, item?.ovr, item?.itemData?.rating, item?._staticData?.rating], 1) || '',
+        rarity: getRarityLabel(item),
+        league: getLeagueLabel(item),
+        nationality: getNationalityLabel(item),
+      });
+    }
+    return rows;
+  }
+
+  function buildSquadExportPayload() {
+    const candidate = getActiveSquadFromControllers();
+    if (!candidate) return null;
+    const rows = normalizeSquadExportRows(candidate);
+    if (!rows.length) return null;
+    return {
+      exportedAt: new Date().toISOString(),
+      source: candidate.source,
+      squadName: pickFirstString([candidate.squad?.name, candidate.squad?._name, candidate.squad?.squadName]),
+      formation: pickFirstString([candidate.squad?.formationName, candidate.squad?.formation]),
+      players: rows,
+    };
+  }
+
+  function escapeCsvCell(value) {
+    const text = String(value ?? '');
+    if (!/[",\n]/.test(text)) return text;
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  function buildSquadExportCsv(payload) {
+    const rows = payload?.players || [];
+    const head = ['Slot Index', 'Squad Position', 'Player Name', 'Rating', 'Rarity', 'League', 'Nationality'];
+    const body = rows.map((row) =>
+      [
+        row.slotIndex,
+        row.squadPosition,
+        row.playerName,
+        row.rating,
+        row.rarity,
+        row.league,
+        row.nationality,
+      ]
+        .map(escapeCsvCell)
+        .join(',')
+    );
+    return [head.join(','), ...body].join('\n');
+  }
+
+  function renderSquadExportPanel(payload) {
+    if (!state.squadExportPre) return;
+    state.squadExportData = payload;
+    state.squadExportCsv = payload ? buildSquadExportCsv(payload) : '';
+    state.squadExportPre.textContent = payload ? JSON.stringify(payload, null, 2) : '';
+  }
+
+  function refreshSquadExport() {
+    squadExportSetStatus('Resolving active squad...', 'info');
+    try {
+      const payload = buildSquadExportPayload();
+      if (!payload) {
+        renderSquadExportPanel(null);
+        squadExportSetStatus('Active squad not detected on the current runtime state', 'error');
+        logLine('squad: active squad not detected');
+        return;
+      }
+      renderSquadExportPanel(payload);
+      squadExportSetStatus(`Exported ${payload.players.length} squad entries`, 'ok');
+    } catch (err) {
+      renderSquadExportPanel(null);
+      squadExportSetStatus(`Export failed: ${String(err)}`, 'error');
+      logLine(`squad: export failed ${String(err)}`);
+    }
+  }
+
+  function copySquadExportText(text, label) {
+    if (!text) {
+      squadExportSetStatus(`Nothing to copy for ${label}`, 'warn');
+      return;
+    }
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        squadExportSetStatus(`${label} copied`, 'ok');
+        logLine(`squad: ${label.toLowerCase()} copied`);
+      })
+      .catch((err) => {
+        squadExportSetStatus(`Clipboard blocked for ${label}`, 'warn');
+        logLine(`squad: clipboard failed ${String(err)}`);
+      });
+  }
+
+  function ensureSquadExportPanel() {
+    if (!document.body) return;
+    if (state.squadExportPanel && document.body.contains(state.squadExportPanel)) return;
+
+    const panel = document.createElement('div');
+    panel.className = SQUAD_EXPORT_PANEL_CLASS;
+    panel.innerHTML = `
+      <div class="pt-futgg-trader-header"><strong>Active Squad Export</strong></div>
+      <div class="pt-futgg-trader-actions"></div>
+      <div class="pt-futgg-trader-status" data-kind="info">Idle</div>
+      <pre class="pt-futgg-log-pre pt-futgg-squad-export-pre"></pre>
+    `;
+
+    const actions = panel.querySelector('.pt-futgg-trader-actions');
+    const status = panel.querySelector('.pt-futgg-trader-status');
+    const pre = panel.querySelector('.pt-futgg-squad-export-pre');
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.addEventListener('click', refreshSquadExport);
+
+    const copyJsonBtn = document.createElement('button');
+    copyJsonBtn.type = 'button';
+    copyJsonBtn.textContent = 'Copy JSON';
+    copyJsonBtn.addEventListener('click', () =>
+      copySquadExportText(state.squadExportData ? JSON.stringify(state.squadExportData, null, 2) : '', 'JSON')
+    );
+
+    const copyCsvBtn = document.createElement('button');
+    copyCsvBtn.type = 'button';
+    copyCsvBtn.textContent = 'Copy CSV';
+    copyCsvBtn.addEventListener('click', () => copySquadExportText(state.squadExportCsv, 'CSV'));
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', () => panel.classList.remove('open'));
+
+    actions.appendChild(refreshBtn);
+    actions.appendChild(copyJsonBtn);
+    actions.appendChild(copyCsvBtn);
+    actions.appendChild(closeBtn);
+
+    document.body.appendChild(panel);
+    state.squadExportPanel = panel;
+    state.squadExportStatus = status;
+    state.squadExportPre = pre;
+  }
+
+  function openSquadExportPanel() {
+    ensureSquadExportPanel();
+    if (!state.squadExportPanel) return;
+    state.squadExportPanel.classList.add('open');
+    refreshSquadExport();
+  }
+
   function scoreFromCard(card) {
     const chip = card?.querySelector?.(`.${CHIP_CLASS}`);
     if (!chip) return -1;
@@ -2101,7 +2508,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (
         container.querySelector(`.${SETTINGS_LOG_ITEM_CLASS}`) &&
         container.querySelector(`.${SETTINGS_TRADER_ITEM_CLASS}`) &&
-        container.querySelector(`.${SETTINGS_DAILY_ITEM_CLASS}`)
+        container.querySelector(`.${SETTINGS_DAILY_ITEM_CLASS}`) &&
+        container.querySelector(`.${SETTINGS_SQUAD_EXPORT_ITEM_CLASS}`)
       ) {
         continue;
       }
@@ -2176,6 +2584,29 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         });
         host.appendChild(dailyItem);
         logLine('daily: injected Daily SBC Runner item into settings menu');
+      }
+
+      if (!container.querySelector(`.${SETTINGS_SQUAD_EXPORT_ITEM_CLASS}`)) {
+        let exportItem;
+        if (rowTemplate) {
+          exportItem = rowTemplate.cloneNode(true);
+          exportItem.classList.add(SETTINGS_SQUAD_EXPORT_ITEM_CLASS);
+          exportItem.removeAttribute?.('id');
+          exportItem.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+          setPrimaryText(exportItem, 'Export Active Squad');
+        } else {
+          exportItem = document.createElement('button');
+          exportItem.type = 'button';
+          exportItem.className = `${DROPDOWN_ITEM_CLASS} ${SETTINGS_SQUAD_EXPORT_ITEM_CLASS}`;
+          exportItem.textContent = 'Export Active Squad';
+        }
+        exportItem.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openSquadExportPanel();
+        });
+        host.appendChild(exportItem);
+        logLine('squad: injected Export Active Squad item into settings menu');
       }
     }
   }
@@ -2294,6 +2725,30 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         host.appendChild(dailyItem);
       }
       logLine('daily: injected Daily SBC Runner item by cloning Paletools row');
+    }
+
+    if (!host.querySelector(`.${SETTINGS_SQUAD_EXPORT_ITEM_CLASS}`)) {
+      const exportItem = rowTemplate.cloneNode(true);
+      exportItem.classList.add(SETTINGS_SQUAD_EXPORT_ITEM_CLASS);
+      exportItem.removeAttribute?.('id');
+      exportItem.querySelectorAll?.('[id]')?.forEach((n) => n.removeAttribute('id'));
+      setRowLabelStrict(exportItem, 'Export Active Squad');
+      const onOpenExport = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        openSquadExportPanel();
+      };
+      exportItem.addEventListener('click', onOpenExport, true);
+      exportItem.addEventListener('touchend', onOpenExport, true);
+      exportItem.addEventListener('pointerup', onOpenExport, true);
+
+      if (rowTemplate.parentNode) {
+        rowTemplate.parentNode.insertBefore(exportItem, rowTemplate.nextSibling);
+      } else {
+        host.appendChild(exportItem);
+      }
+      logLine('squad: injected Export Active Squad item by cloning Paletools row');
     }
   }
 
@@ -3870,6 +4325,22 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         overflow: auto;
       }
       .${DAILY_PANEL_CLASS}.open { display: block; }
+      .${SQUAD_EXPORT_PANEL_CLASS} {
+        display: none;
+        position: fixed;
+        left: 8px;
+        right: 8px;
+        top: 8px;
+        bottom: 8px;
+        z-index: 2147483647;
+        border: 1px solid rgba(78, 230, 235, 0.75);
+        border-radius: 8px;
+        background: rgba(12, 15, 20, 0.98);
+        color: #d7dde6;
+        padding: 10px;
+        overflow: auto;
+      }
+      .${SQUAD_EXPORT_PANEL_CLASS}.open { display: block; }
       .pt-futgg-trader-header {
         margin-bottom: 8px;
         color: #4ee6eb;
@@ -3987,6 +4458,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         word-break: break-word;
         font-size: 10px;
         line-height: 1.3;
+      }
+      .pt-futgg-squad-export-pre {
+        margin-top: 10px;
+        max-height: calc(100% - 110px);
+        border: 1px solid rgba(78, 230, 235, 0.25);
+        border-radius: 6px;
+        background: rgba(15, 21, 27, 0.9);
       }
     `;
 

@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-39';
+  const BUILD_ID = 'pt-futgg-20260405-40';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -1862,18 +1862,52 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return rows;
   }
 
+  function isWeakSquadExportSource(source) {
+    return /featuredSquads|featured|message|objective|news|tile/i.test(String(source || ''));
+  }
+
+  function scoreSquadExportCandidate(candidate, rows, squadName, formation) {
+    let score = Number(candidate?.score || 0);
+    let filledDetails = 0;
+    for (const row of rows) {
+      if (row.rarity) filledDetails += 1;
+      if (row.league) filledDetails += 1;
+      if (row.nationality) filledDetails += 1;
+    }
+    score += filledDetails * 6;
+    if (squadName) score += 18;
+    if (formation) score += 12;
+    if (String(candidate?.source || '').startsWith('recent:')) score -= 25;
+    if (isWeakSquadExportSource(candidate?.source)) score -= 220;
+    if (rows.length && rows.every((row) => !row.rarity && !row.league && !row.nationality)) score -= 90;
+    return score;
+  }
+
   function buildSquadExportPayload() {
-    const candidate = getActiveSquadFromUiRoots() || getActiveSquadFromRecentPayloads() || getActiveSquadFromControllers();
-    if (!candidate) return null;
-    const rows = normalizeSquadExportRows(candidate);
-    if (!rows.length) return null;
-    return {
-      exportedAt: new Date().toISOString(),
-      source: candidate.source,
-      squadName: pickFirstString([candidate.squad?.name, candidate.squad?._name, candidate.squad?.squadName]),
-      formation: pickFirstString([candidate.squad?.formationName, candidate.squad?.formation]),
-      players: rows,
-    };
+    const candidates = [getActiveSquadFromUiRoots(), getActiveSquadFromControllers(), getActiveSquadFromRecentPayloads()].filter(Boolean);
+    if (!candidates.length) return null;
+
+    let bestPayload = null;
+    let bestScore = -Infinity;
+    for (const candidate of candidates) {
+      const rows = normalizeSquadExportRows(candidate);
+      if (!rows.length) continue;
+      const squadName = pickFirstString([candidate.squad?.name, candidate.squad?._name, candidate.squad?.squadName]);
+      const formation = pickFirstString([candidate.squad?.formationName, candidate.squad?.formation]);
+      const score = scoreSquadExportCandidate(candidate, rows, squadName, formation);
+      if (score <= bestScore) continue;
+      bestScore = score;
+      bestPayload = {
+        exportedAt: new Date().toISOString(),
+        source: candidate.source,
+        squadName,
+        formation,
+        players: rows,
+      };
+    }
+
+    if (bestPayload) logLine(`squad: export source=${bestPayload.source} score=${bestScore}`);
+    return bestPayload;
   }
 
   function escapeCsvCell(value) {
@@ -3123,7 +3157,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const now = Date.now();
     const fresh = (state.recentSquadPayloads || []).filter((row) => now - Number(row?.ts || 0) < 30000);
     if (!fresh.length) return null;
-    fresh.sort((a, b) => b.ts - a.ts || b.size - a.size);
+    fresh.sort((a, b) => {
+      const aWeak = /featuredSquads|featured/i.test(String(a?.source || '')) ? 1 : 0;
+      const bWeak = /featuredSquads|featured/i.test(String(b?.source || '')) ? 1 : 0;
+      return aWeak - bWeak || b.ts - a.ts || b.size - a.size;
+    });
     const best = fresh[0];
     const players = extractSquadPlayersArray(best.payload);
     if (!players) return null;

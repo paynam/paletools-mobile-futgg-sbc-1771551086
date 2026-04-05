@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-41';
+  const BUILD_ID = 'pt-futgg-20260405-42';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -1867,6 +1867,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       item?._staticData?.rarityLabel,
       item?._staticData?.rarityName,
       item?._staticData?.rarity,
+      item?.subtype,
+      item?._subtype,
+      item?.itemData?.subtype,
+      item?._staticData?.subtype,
+      item?.itemType,
+      item?.typeName,
     ]);
     if (direct) return direct;
     if (item?.rareflag === true || item?.itemData?.rareflag === true) return 'Rare';
@@ -1903,6 +1909,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
           logLine(
             `squad: row debug slot=${row.slotIndex} missing=${missing.join('|')} ` +
               `defId=${pickEaIdFromObject(item) || 0} rating=${row.rating || 0} ` +
+              `type=${String(item?.type || '')} subtype=${String(item?.subtype || item?._subtype || '')} ` +
+              `itemType=${String(item?.itemType || item?.typeName || '')} rareflag=${String(item?.rareflag ?? item?.itemData?.rareflag ?? '')} ` +
+              `assetType=${String(item?._staticData?.assetType || '')} assetYear=${String(item?._staticData?.assetYear || '')} ` +
+              `desc=${String(item?._staticData?.description || '').slice(0, 48)} manufacturer=${String(item?._staticData?.manufacturer || '')} ` +
               `slotKeys=${describeObjectKeys(slot)} itemKeys=${describeObjectKeys(item)} ` +
               `itemDataKeys=${describeObjectKeys(item?.itemData)} staticKeys=${describeObjectKeys(item?._staticData)}`
           );
@@ -3439,7 +3449,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         const fn = service?.[method];
         if (typeof fn !== 'function') continue;
         const value = String(fn.call(service, key) || '').trim();
-        if (value && value !== key && !/^undefined|null$/i.test(value)) return value;
+        if (!value || value === key || /^undefined|null$/i.test(value)) continue;
+        if (value === `*${key}` || value.startsWith('*global.') || value.startsWith('*search.')) continue;
+        return value;
       } catch {}
     }
     return '';

@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-35';
+  const BUILD_ID = 'pt-futgg-20260405-36';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -56,6 +56,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const SETTINGS_TRADER_ITEM_CLASS = 'pt-futgg-settings-trader-item';
   const SETTINGS_DAILY_ITEM_CLASS = 'pt-futgg-settings-daily-item';
   const SETTINGS_SQUAD_EXPORT_ITEM_CLASS = 'pt-futgg-settings-squad-export-item';
+  const SQUAD_EXPORT_ENTRY_CLASS = 'pt-futgg-squad-export-entry';
   const SBC_AUTO_BTN_CLASS = 'pt-futgg-sbc-auto-btn';
   const LOG_PANEL_CLASS = 'pt-futgg-log-panel';
   const TRADER_PANEL_CLASS = 'pt-futgg-trader-panel';
@@ -1497,6 +1498,106 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return null;
   }
 
+  function getSquadViewNodes() {
+    return Array.from(
+      document.querySelectorAll(
+        '.ut-squad-overview, .ut-squad-pitch-view, .ut-squad-slot-view, .SquadPanel, .ut-squad-view, [class*="squad-pitch"], [class*="squad-overview"]'
+      )
+    ).filter((node, idx, arr) => node && (isElementVisible(node) || arr.length === 1) && idx === arr.indexOf(node));
+  }
+
+  function getActiveSquadFromUiRoots() {
+    const squadNodes = getSquadViewNodes();
+    if (!squadNodes.length) return null;
+
+    const candidates = [];
+    const seen = new WeakSet();
+    const goodPathRe = /(squad|lineup|pitch|slot|formation|starter|bench|reserve|overview|active|selected|current|viewmodel)/i;
+    const badPathRe = /(message|objective|news|store|pack|market|transfer|sbc|banner|inbox|tile)/i;
+
+    const addCandidate = (squad, path, source) => {
+      const players = extractSquadPlayersArray(squad);
+      if (!players) return;
+      const populated = players.filter((entry) => extractItemFromSquadSlot(entry)).length;
+      if (populated < 5) return;
+      let score = populated * 12;
+      if (goodPathRe.test(path)) score += 120;
+      if (badPathRe.test(path) && !/squad/i.test(path)) score -= 120;
+      if (Number(squad?.formation) > 0 || String(squad?.formationName || '').trim()) score += 35;
+      if (squad?._manager || squad?.manager) score += 20;
+      candidates.push({
+        squad,
+        players,
+        source: `${source}:${path}`,
+        score,
+      });
+    };
+
+    const queue = [];
+    for (let i = 0; i < squadNodes.length; i += 1) {
+      const node = squadNodes[i];
+      const label = `squadNode[${i}]`;
+      const internals = extractInternalObjectsFromNode(node);
+      for (const internal of internals) {
+        queue.push({ node: internal.obj, path: `${label}.${internal.key}`, depth: 0 });
+      }
+      const parent = node.parentElement;
+      if (parent) {
+        const parentInternals = extractInternalObjectsFromNode(parent);
+        for (const internal of parentInternals) {
+          queue.push({ node: internal.obj, path: `${label}.parent.${internal.key}`, depth: 0 });
+        }
+      }
+    }
+
+    let visited = 0;
+    const MAX_VISIT = 1500;
+    const MAX_DEPTH = 7;
+    while (queue.length && visited < MAX_VISIT) {
+      const cur = queue.shift();
+      const node = cur?.node;
+      const path = cur?.path || 'ui';
+      const depth = cur?.depth || 0;
+      if (!node || typeof node !== 'object') continue;
+      if (seen.has(node)) continue;
+      seen.add(node);
+      visited += 1;
+
+      const directPlayers = extractSquadPlayersArray(node);
+      if (directPlayers) addCandidate(node, path, 'ui');
+      if (node._squad && typeof node._squad === 'object') addCandidate(node._squad, `${path}._squad`, 'ui');
+      if (node.squad && typeof node.squad === 'object') addCandidate(node.squad, `${path}.squad`, 'ui');
+      if (node._viewmodel?._squad && typeof node._viewmodel._squad === 'object') {
+        addCandidate(node._viewmodel._squad, `${path}._viewmodel._squad`, 'ui');
+      }
+      if (node.viewmodel?._squad && typeof node.viewmodel._squad === 'object') {
+        addCandidate(node.viewmodel._squad, `${path}.viewmodel._squad`, 'ui');
+      }
+
+      if (depth >= MAX_DEPTH) continue;
+      for (const key of Object.keys(node)) {
+        if (!key || key.startsWith('__')) continue;
+        const value = node[key];
+        if (!value || typeof value !== 'object') continue;
+        if (Array.isArray(value)) {
+          const lim = Math.min(value.length, 20);
+          for (let i = 0; i < lim; i += 1) {
+            const child = value[i];
+            if (child && typeof child === 'object') queue.push({ node: child, path: `${path}.${key}[${i}]`, depth: depth + 1 });
+          }
+        } else {
+          queue.push({ node: value, path: `${path}.${key}`, depth: depth + 1 });
+        }
+      }
+    }
+
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+    logLine(`squad: ui candidates=${candidates.length} best=${best.players.length} source=${best.source} score=${best.score}`);
+    return best;
+  }
+
   function getActiveSquadFromControllers() {
     const roots = getControllerRoots();
     const candidates = [];
@@ -1693,7 +1794,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   }
 
   function buildSquadExportPayload() {
-    const candidate = getActiveSquadFromControllers();
+    const candidate = getActiveSquadFromUiRoots() || getActiveSquadFromControllers();
     if (!candidate) return null;
     const rows = normalizeSquadExportRows(candidate);
     if (!rows.length) return null;
@@ -1829,6 +1930,31 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (!state.squadExportPanel) return;
     state.squadExportPanel.classList.add('open');
     refreshSquadExport();
+  }
+
+  function ensureSquadViewExportButton() {
+    const squadNodes = getSquadViewNodes();
+    if (!squadNodes.length) return;
+    const squadRoot =
+      squadNodes.find((node) => node.matches('.ut-squad-overview, .SquadPanel, .ut-squad-view')) || squadNodes[0] || null;
+    if (!squadRoot) return;
+
+    const host =
+      squadRoot.querySelector('.ut-section-header-view, .ut-list-header, .clubDetailsContainer, .squad-details, .ut-navigation-bar-view') ||
+      squadRoot;
+    if (!host || host.querySelector(`.${SQUAD_EXPORT_ENTRY_CLASS}`)) return;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `${DROPDOWN_ITEM_CLASS} ${SQUAD_EXPORT_ENTRY_CLASS}`;
+    button.textContent = 'Export Active Squad';
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openSquadExportPanel();
+    });
+    host.appendChild(button);
+    logLine('squad: injected Export Active Squad button into squad view');
   }
 
   function scoreFromCard(card) {
@@ -4158,6 +4284,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     ensureListSortHook();
     ensureSettingsLogsHook();
     ensurePaletoolsSettingsLogsHook();
+    ensureSquadViewExportButton();
     reapplyActiveSbcSortIfNeeded(cards);
     ensureSbcAutoButtons();
 
@@ -4258,6 +4385,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         text-align: left;
         font-size: 12px;
         font-weight: 700;
+      }
+      .${SQUAD_EXPORT_ENTRY_CLASS} {
+        pointer-events: auto;
+        touch-action: manipulation;
+        max-width: 240px;
       }
       .${SBC_AUTO_BTN_CLASS} {
         margin-top: 6px;

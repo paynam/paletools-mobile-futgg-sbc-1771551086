@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-37';
+  const BUILD_ID = 'pt-futgg-20260405-38';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -1538,9 +1538,36 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     ).filter((node, idx, arr) => node && (isElementVisible(node) || arr.length === 1) && idx === arr.indexOf(node));
   }
 
+
+  function isLockPlayersText(text) {
+    const txt = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return txt.includes('players') && (txt.includes('lock') || txt.includes('unlock'));
+  }
+
+  function getSquadLockButton() {
+    const squadNodes = getSquadViewNodes();
+    const scopeNodes = squadNodes.length ? squadNodes : [document.body].filter(Boolean);
+    for (const scope of scopeNodes) {
+      const candidates = getClickableCandidates(scope);
+      for (const node of candidates) {
+        if (!isElementVisible(node)) continue;
+        if (!isLockPlayersText(node.textContent || '')) continue;
+        return node;
+      }
+    }
+    const all = getClickableCandidates(document);
+    for (const node of all) {
+      if (!isElementVisible(node)) continue;
+      if (!isLockPlayersText(node.textContent || '')) continue;
+      return node;
+    }
+    return null;
+  }
+
   function getActiveSquadFromUiRoots() {
     const squadNodes = getSquadViewNodes();
-    if (!squadNodes.length) return null;
+    const lockButton = getSquadLockButton();
+    if (!squadNodes.length && !lockButton) return null;
 
     const candidates = [];
     const seen = new WeakSet();
@@ -1566,9 +1593,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     };
 
     const queue = [];
-    for (let i = 0; i < squadNodes.length; i += 1) {
-      const node = squadNodes[i];
-      const label = `squadNode[${i}]`;
+    const seedNode = (node, label) => {
+      if (!node) return;
       const internals = extractInternalObjectsFromNode(node);
       for (const internal of internals) {
         queue.push({ node: internal.obj, path: `${label}.${internal.key}`, depth: 0 });
@@ -1580,7 +1606,18 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
           queue.push({ node: internal.obj, path: `${label}.parent.${internal.key}`, depth: 0 });
         }
       }
+      const grand = parent?.parentElement;
+      if (grand) {
+        const grandInternals = extractInternalObjectsFromNode(grand);
+        for (const internal of grandInternals) {
+          queue.push({ node: internal.obj, path: `${label}.grand.${internal.key}`, depth: 0 });
+        }
+      }
+    };
+    for (let i = 0; i < squadNodes.length; i += 1) {
+      seedNode(squadNodes[i], `squadNode[${i}]`);
     }
+    if (lockButton) seedNode(lockButton, 'lockButton');
 
     let visited = 0;
     const MAX_VISIT = 1500;
@@ -1967,6 +2004,38 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   }
 
   function ensureSquadViewExportButton() {
+    const existing = document.querySelector(`.${SQUAD_EXPORT_ENTRY_CLASS}`);
+    if (existing && document.documentElement.contains(existing)) return;
+
+    const lockButton = getSquadLockButton();
+    if (lockButton) {
+      const exportButton = lockButton.cloneNode(true);
+      exportButton.classList.add(SQUAD_EXPORT_ENTRY_CLASS);
+      exportButton.removeAttribute('disabled');
+      exportButton.dataset.ptFutggExport = '1';
+      exportButton.querySelectorAll('[data-ut-event], [data-ut-custom-event]').forEach((node) => {
+        node.removeAttribute('data-ut-event');
+        node.removeAttribute('data-ut-custom-event');
+      });
+      if (exportButton.matches('input')) {
+        exportButton.value = 'Export Active Squad';
+      } else {
+        const textNode = Array.from(exportButton.querySelectorAll('*')).find((node) => isLockPlayersText(node.textContent || '')) || exportButton;
+        if (textNode === exportButton) exportButton.textContent = 'Export Active Squad';
+        else textNode.textContent = 'Export Active Squad';
+      }
+      const cleanClick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openSquadExportPanel();
+      };
+      exportButton.onclick = cleanClick;
+      exportButton.addEventListener('click', cleanClick);
+      lockButton.insertAdjacentElement('afterend', exportButton);
+      logLine('squad: injected Export Active Squad button beside Lock / Unlock Players');
+      return;
+    }
+
     const squadNodes = getSquadViewNodes();
     if (!squadNodes.length) return;
     const squadRoot =
@@ -1988,7 +2057,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       openSquadExportPanel();
     });
     host.appendChild(button);
-    logLine('squad: injected Export Active Squad button into squad view');
+    logLine('squad: injected Export Active Squad button into squad view fallback host');
   }
 
   function scoreFromCard(card) {

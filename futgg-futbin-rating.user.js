@@ -159,13 +159,13 @@
     badge.querySelector('.pt-futbin-value').textContent = value;
   }
 
-  function gmGetJson(url) {
+  function gmGet(url, responseType) {
     return new Promise((resolve, reject) => {
       gmRequest({
         method: 'GET',
         url,
         headers: {
-          Accept: 'application/json, text/plain, */*',
+          Accept: responseType === 'json' ? 'application/json, text/plain, */*' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'X-Requested-With': 'XMLHttpRequest',
         },
         onload(response) {
@@ -173,11 +173,7 @@
             reject(new Error('HTTP ' + response.status));
             return;
           }
-          try {
-            resolve(JSON.parse(response.responseText));
-          } catch (error) {
-            reject(error);
-          }
+          resolve(response.responseText);
         },
         onerror() {
           reject(new Error('Network error'));
@@ -188,6 +184,14 @@
         timeout: 15000,
       });
     });
+  }
+
+  async function gmGetJson(url) {
+    return JSON.parse(await gmGet(url, 'json'));
+  }
+
+  async function gmGetText(url) {
+    return gmGet(url, 'text');
   }
 
   function collectStrings(value, out) {
@@ -218,10 +222,24 @@
     );
   }
 
-  function getCandidateRating(candidate) {
+  function getCandidateCardOverall(candidate) {
     const rating = candidate && candidate.ratingSquare && candidate.ratingSquare.rating;
     if (rating) return String(rating);
     if (candidate && candidate.rating) return String(candidate.rating);
+    return '';
+  }
+
+  function parseFutbinRatingFromHtml(html) {
+    if (!html) return '';
+    const patterns = [
+      /<div class=\"player-page-futbin-rating-box-rating\">[\s\S]*?<span[^>]*>([0-9]+(?:\.[0-9]+)?)<\/span>/i,
+      /<div class=\"playercard-26-futbin-rating\">\s*([0-9]+(?:\.[0-9]+)?)\s*<\/div>/i,
+      /data-futbin-rating-box-rating-tag=\"\"[^>]*>([0-9]+(?:\.[0-9]+)?)<\/span>/i
+    ];
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      if (match && match[1]) return match[1];
+    }
     return '';
   }
 
@@ -260,13 +278,23 @@
 
       const exact = matchCandidateByEaItemId(candidates, pathInfo.itemEaId);
       const candidate = exact || candidates[0];
-      const rating = getCandidateRating(candidate);
       const href = getCandidateUrl(candidate);
+      const cardOverall = getCandidateCardOverall(candidate);
+      let futbinRating = '';
+
+      if (href) {
+        const html = await gmGetText(href);
+        futbinRating = parseFutbinRatingFromHtml(html);
+      }
+
+      const rating = futbinRating || cardOverall;
 
       log('match', {
         exact: !!exact,
         candidateId: candidate && candidate.id,
         rating,
+        futbinRating,
+        cardOverall,
         href,
       });
 

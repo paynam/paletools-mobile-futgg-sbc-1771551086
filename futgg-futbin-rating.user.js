@@ -231,15 +231,16 @@
 
   function parseFutbinRatingFromHtml(html) {
     if (!html) return '';
-    const patterns = [
-      /<div class=\"player-page-futbin-rating-box-rating\">[\s\S]*?<span[^>]*>([0-9]+(?:\.[0-9]+)?)<\/span>/i,
-      /<div class=\"playercard-26-futbin-rating\">\s*([0-9]+(?:\.[0-9]+)?)\s*<\/div>/i,
-      /data-futbin-rating-box-rating-tag=\"\"[^>]*>([0-9]+(?:\.[0-9]+)?)<\/span>/i
-    ];
-    for (const pattern of patterns) {
-      const match = html.match(pattern);
-      if (match && match[1]) return match[1];
-    }
+
+    // FUTBIN server-renders the active player card rating in this element.
+    // Use that first because the dynamic rating box is empty before hydration.
+    const cardMatch = html.match(/<div class="playercard-26-futbin-rating">\s*([0-9]+(?:\.[0-9]+)?)\s*<\/div>/i);
+    if (cardMatch && cardMatch[1]) return cardMatch[1];
+
+    // Fallback for pages where the hydrated rating box is already rendered in HTML.
+    const ratingBox = html.match(/<div class="player-page-futbin-rating-box-rating">\s*<span[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<\/span>\s*<\/div>/i);
+    if (ratingBox && ratingBox[1]) return ratingBox[1];
+
     return '';
   }
 

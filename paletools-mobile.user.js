@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-44';
+  const BUILD_ID = 'pt-futgg-20260405-45';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -66,10 +66,14 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const SORT_DESC_VALUE = '__pt_futgg_desc__';
   const SORT_ASC_VALUE = '__pt_futgg_asc__';
   const CARD_FLAG = 'ptFutggRatingBound';
+  const PLAYER_CARD_FLAG = 'ptFutggPlayerCardBound';
+  const PLAYER_CARD_LOADING_FLAG = 'ptFutggPlayerCardLoading';
   const PLAYER_CONTENT_TYPE = 27;
   const DEFAULT_GAME = '26';
   const TRADER_STORAGE_KEY = 'pt_futgg_auto_trader_v1';
   const DAILY_STORAGE_KEY = 'pt_futgg_daily_runner_v1';
+  const PLAYER_CARD_CHIP_CLASS = 'pt-futgg-player-rating-chip';
+  const PLAYER_CARD_ANCHOR_CLASS = 'pt-futgg-player-rating-anchor';
   const DEFAULT_TRADER_CONFIG = {
     enabled: false,
     searchText: '',
@@ -136,6 +140,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     chemStyleNamesByGame: new Map(),
     chemStyleNamesLoadByGame: new Map(),
     lastPlayerScanAt: 0,
+    lastPlayerCardScanAt: 0,
     recentPlayerIds: [],
     recentSquadPayloads: [],
     networkSnifferInstalled: false,
@@ -4273,6 +4278,168 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return `FUT.GG: ${parts.join(' | ')}`;
   }
 
+  function formatFutggCardRating(score) {
+    const value = Number(score);
+    if (!Number.isFinite(value)) return '';
+    return `GG ${value.toFixed(1)}`;
+  }
+
+  function getCardDisplayName(card) {
+    if (!card) return null;
+    const selectors = [
+      '.name',
+      '.entityContainer .name',
+      '.firstname',
+      '.lastname',
+      '.label',
+      '.title',
+      '[class*="name"]',
+      '[class*="playerName"]',
+    ];
+    for (const selector of selectors) {
+      const node = card.querySelector(selector);
+      const txt = String(node?.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (txt && txt !== '[object Object]' && txt.length >= 3) return txt;
+    }
+    return null;
+  }
+
+  function getVisiblePlayerCardNodes() {
+    const selectors = [
+      '.ut-squad-slot-view',
+      '.listFUTItem',
+      '.ut-item-view',
+      '.ut-item-player',
+      '.player.item',
+      '.large.player',
+      '.small.player',
+      '[class*="player-card"]',
+      '[class*="item-view"]',
+    ];
+    const seen = new Set();
+    return Array.from(document.querySelectorAll(selectors.join(','))).filter((node) => {
+      if (!node || seen.has(node)) return false;
+      seen.add(node);
+      if (!isElementVisible(node)) return false;
+      const cls = String(node.className || '').toLowerCase();
+      if (cls.includes('sbc') || cls.includes('challenge') || cls.includes('reward')) return false;
+      if (node.closest('.ut-sbc-set-tile-view, .ut-sbc-challenge-tile-view, .ut-sbc-challenge-table-row-view')) return false;
+      return true;
+    });
+  }
+
+  function resolvePlayerCardContext(card) {
+    if (!card) return null;
+    const displayedName = getCardDisplayName(card);
+    const seedNodes = [card, card.parentElement, card.firstElementChild].filter(Boolean);
+    const goodPathRe = /(item|player|viewmodel|entity|slot|current|selected|auction|data|card|rowcontent)/i;
+    const badPathRe = /(sbc|challenge|reward|objective|pack|store|message|tile|menu)/i;
+    const candidates = [];
+
+    for (const seed of seedNodes) {
+      const internals = extractInternalObjectsFromNode(seed);
+      for (const internal of internals) {
+        const queue = [{ node: internal.obj, path: internal.key, depth: 0 }];
+        const seen = new WeakSet();
+        let visited = 0;
+        while (queue.length && visited < 180) {
+          const cur = queue.shift();
+          const obj = cur?.node;
+          const depth = cur?.depth || 0;
+          if (!obj || typeof obj !== 'object') continue;
+          if (seen.has(obj)) continue;
+          seen.add(obj);
+          visited += 1;
+
+          const eaId = pickEaIdFromObject(obj);
+          if (eaId) {
+            const playerName = pickPlayerNameFromObject(obj);
+            let score = 30;
+            if (goodPathRe.test(cur.path)) score += 40;
+            if (badPathRe.test(cur.path)) score -= 50;
+            if (playerName) score += 20;
+            if (displayedName && playerName) score += Math.round(100 * nameSimilarityScore(displayedName, playerName));
+            if (Number(obj?.rating) > 0) score += 5;
+            candidates.push({
+              game: DEFAULT_GAME,
+              eaId,
+              playerName: playerName || null,
+              score,
+              source: `card:${cur.path}`,
+            });
+          }
+
+          if (depth >= 4) continue;
+          for (const key of Object.keys(obj)) {
+            if (!key || key.startsWith('__')) continue;
+            const val = obj[key];
+            if (!val || typeof val !== 'object') continue;
+            if (Array.isArray(val)) {
+              const limit = Math.min(val.length, 5);
+              for (let i = 0; i < limit; i++) {
+                const child = val[i];
+                if (child && typeof child === 'object') {
+                  queue.push({ node: child, path: `${cur.path}.${key}[${i}]`, depth: depth + 1 });
+                }
+              }
+            } else {
+              queue.push({ node: val, path: `${cur.path}.${key}`, depth: depth + 1 });
+            }
+          }
+        }
+      }
+    }
+
+    if (!candidates.length) return null;
+    const filtered = candidates.filter((candidate) => {
+      const similarity =
+        displayedName && candidate.playerName ? nameSimilarityScore(displayedName, candidate.playerName) : 0;
+      if (similarity >= 0.6) return true;
+      if (!displayedName && candidate.score >= 80) return true;
+      return candidate.score >= 105;
+    });
+    if (!filtered.length) return null;
+    filtered.sort((a, b) => b.score - a.score);
+    return filtered[0];
+  }
+
+  function getPlayerCardBadgeHost(card) {
+    if (!card) return null;
+    return card.querySelector('.prices-container') || card;
+  }
+
+  function injectPlayerCardChip(card, text) {
+    if (!card || !text) return;
+    const host = getPlayerCardBadgeHost(card);
+    if (!host) return;
+    const existing = host.querySelector(`.${PLAYER_CARD_CHIP_CLASS}`);
+    if (existing) {
+      existing.textContent = text;
+      return;
+    }
+    if (host === card) card.classList.add(PLAYER_CARD_ANCHOR_CLASS);
+    const chip = document.createElement('span');
+    chip.className = PLAYER_CARD_CHIP_CLASS;
+    chip.textContent = text;
+    host.appendChild(chip);
+  }
+
+  async function decoratePlayerCard(card, ctx) {
+    if (!card || !ctx || card[PLAYER_CARD_LOADING_FLAG]) return;
+    card[PLAYER_CARD_LOADING_FLAG] = true;
+    try {
+      const playerData = await loadPlayerData(ctx.game || DEFAULT_GAME, ctx.eaId);
+      const text = formatFutggCardRating(playerData?.bestScore);
+      if (text) {
+        injectPlayerCardChip(card, text);
+        card[PLAYER_CARD_FLAG] = true;
+      }
+    } catch {}
+    card[PLAYER_CARD_LOADING_FLAG] = false;
+  }
+
   async function loadPlayerData(game, eaId) {
     const key = `${game}-${eaId}`;
     if (state.playerCache.has(key)) return state.playerCache.get(key);
@@ -4416,6 +4583,19 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (!menuItem) return;
     menuItem.dataset.kind = payload.error ? 'error' : 'ok';
     menuItem.textContent = formatPlayerMenuText(payload);
+  }
+
+  function scanPlayerCards() {
+    const now = Date.now();
+    if (now - state.lastPlayerCardScanAt < 500) return;
+    state.lastPlayerCardScanAt = now;
+
+    for (const card of getVisiblePlayerCardNodes()) {
+      if (!card || card[PLAYER_CARD_FLAG] || card[PLAYER_CARD_LOADING_FLAG]) continue;
+      const ctx = resolvePlayerCardContext(card);
+      if (!ctx || !Number.isFinite(Number(ctx.eaId))) continue;
+      decoratePlayerCard(card, ctx);
+    }
   }
 
   function getFromRequirementText(requirementText) {
@@ -5084,6 +5264,34 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         border-radius: 6px;
         background: rgba(15, 21, 27, 0.9);
       }
+      .${PLAYER_CARD_CHIP_CLASS} {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-left: auto;
+        padding: 1px 5px;
+        border-radius: 999px;
+        border: 1px solid rgba(78, 230, 235, 0.72);
+        background: rgba(12, 15, 20, 0.92);
+        color: #4ee6eb;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.15;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      .prices-container .${PLAYER_CARD_CHIP_CLASS} {
+        margin-left: 4px;
+      }
+      .${PLAYER_CARD_ANCHOR_CLASS} {
+        position: relative !important;
+      }
+      .${PLAYER_CARD_ANCHOR_CLASS} > .${PLAYER_CARD_CHIP_CLASS} {
+        position: absolute;
+        left: 6px;
+        bottom: 6px;
+        z-index: 3;
+      }
     `;
 
     document.head.appendChild(style);
@@ -5092,6 +5300,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   function bootObserver() {
     const observer = new MutationObserver(() => {
       scanCards();
+      scanPlayerCards();
       scanPlayerDetails().catch((err) => logLine(`player: scan failed ${String(err)}`));
     });
     observer.observe(document.body, {
@@ -5100,13 +5309,17 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     });
     addCleanup(() => observer.disconnect());
 
-    const scanIntervalId = setInterval(scanCards, 1500);
+    const scanIntervalId = setInterval(() => {
+      scanCards();
+      scanPlayerCards();
+    }, 1500);
     const playerIntervalId = setInterval(() => {
       scanPlayerDetails().catch((err) => logLine(`player: scan failed ${String(err)}`));
     }, 1500);
     addCleanup(() => clearInterval(scanIntervalId));
     addCleanup(() => clearInterval(playerIntervalId));
     scanCards();
+    scanPlayerCards();
     scanPlayerDetails().catch((err) => logLine(`player: scan failed ${String(err)}`));
   }
 

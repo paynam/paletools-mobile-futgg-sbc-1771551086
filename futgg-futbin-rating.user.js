@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FUT.GG FUTBIN Rating
 // @namespace    https://github.com/paynam/paletools-mobile-futgg-sbc-1771551086
-// @version      2026.04.05.01
+// @version      2026.04.05.02
 // @description  Show FUTBIN rating on FUT.GG player pages.
 // @author       Codex
 // @match        https://www.fut.gg/players/*
@@ -12,7 +12,7 @@
 (function () {
   'use strict';
 
-  const BUILD_ID = 'futgg-futbin-20260405-01';
+  const BUILD_ID = 'futgg-futbin-20260405-02';
   const BADGE_ID = 'pt-futbin-rating-chip';
   const STYLE_ID = 'pt-futbin-rating-style';
   const SEARCH_ENDPOINT = 'https://www.futbin.com/players/search?targetPage=PLAYER_PAGE';

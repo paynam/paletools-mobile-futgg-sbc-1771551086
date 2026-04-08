@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260408-48';
+  const BUILD_ID = 'pt-futgg-20260408-49';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -3894,7 +3894,18 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         key === 'player' ||
         key === '_currentItem' ||
         key === 'currentItem' ||
-        key === 'itemData'
+        key === 'itemData' ||
+        key === '__rowContent' ||
+        key === '__entityContainer' ||
+        key === '__pricesContainer' ||
+        key === 'itemComponent' ||
+        key === '_itemView' ||
+        key === 'itemView' ||
+        key === '_model' ||
+        key === 'model' ||
+        key === '_data' ||
+        key === 'data' ||
+        key === 'presentedItem'
       ) {
         out.push({ obj: val, key });
         continue;
@@ -4491,12 +4502,23 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       '__reactProps$',
       '__reactFiber$',
     ];
+    const ancestors = [];
+    let ancestor = card;
+    for (let i = 0; i < 4 && ancestor; i += 1) {
+      ancestors.push(ancestor);
+      ancestor = ancestor.parentElement;
+    }
     const seedNodes = [
       card,
       card.parentElement,
       card.firstElementChild,
       card.closest('.listFUTItem'),
-      ...Array.from(card.querySelectorAll('.rowContent, .entityContainer, .item, .itemContent, .player, .ut-item-view')).slice(0, 8),
+      ...ancestors,
+      ...Array.from(
+        card.querySelectorAll(
+          '.rowContent, .entityContainer, .item, .itemContent, .player, .ut-item-view, .label, .name, .auction, .player-stats-data-component'
+        )
+      ).slice(0, 16),
     ].filter(Boolean);
     const candidates = [];
 
@@ -4541,7 +4563,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
           continue;
         }
 
-        if (!directKeys.includes(prop) && !prop.startsWith('_')) continue;
+        if (
+          !directKeys.includes(prop) &&
+          !prop.startsWith('_') &&
+          !/item|player|row|entity|model|data|view/i.test(prop)
+        ) continue;
         const eaId = pickEaIdFromObject(value);
         const playerName = pickPlayerNameFromObject(value);
         if (!eaId && !playerName) continue;
@@ -4571,11 +4597,23 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const displayedName = getCardDisplayName(card);
     const direct = resolveDirectPlayerCardCandidate(card);
     if (direct) return direct;
+    const ancestors = [];
+    let ancestor = card;
+    for (let i = 0; i < 5 && ancestor; i += 1) {
+      ancestors.push(ancestor);
+      ancestor = ancestor.parentElement;
+    }
     const seedNodes = [
       card,
       card.parentElement,
       card.firstElementChild,
-      ...Array.from(card.querySelectorAll('.rowContent, .entityContainer, .item, .itemContent, .player, .ut-item-view')).slice(0, 8),
+      card.closest('.listFUTItem'),
+      ...ancestors,
+      ...Array.from(
+        card.querySelectorAll(
+          '.rowContent, .entityContainer, .item, .itemContent, .player, .ut-item-view, .label, .name, .auction, .player-stats-data-component'
+        )
+      ).slice(0, 16),
     ].filter(Boolean);
     const goodPathRe = /(item|player|viewmodel|entity|slot|current|selected|auction|data|card|rowcontent)/i;
     const badPathRe = /(sbc|challenge|reward|objective|pack|store|message|tile|menu)/i;

@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260408-51';
+  const BUILD_ID = 'pt-futgg-20260408-52';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -72,10 +72,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const DEFAULT_GAME = '26';
   const TRADER_STORAGE_KEY = 'pt_futgg_auto_trader_v1';
   const DAILY_STORAGE_KEY = 'pt_futgg_daily_runner_v1';
+  const PLAYER_CARD_STORAGE_PREFIX = 'pt_futgg_card_rate_v1:';
+  const PLAYER_DETAIL_STORAGE_PREFIX = 'pt_futgg_player_rate_v1:';
   const PLAYER_CARD_CHIP_CLASS = 'pt-futgg-player-rating-chip';
   const PLAYER_CARD_ANCHOR_CLASS = 'pt-futgg-player-rating-anchor';
   const PLAYER_CARD_LOAD_CONCURRENCY = 3;
   const PLAYER_CARD_FAIL_COOLDOWN_MS = 30000;
+  const PLAYER_RATE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
   const DEFAULT_TRADER_CONFIG = {
     enabled: false,
     searchText: '',
@@ -202,6 +205,36 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (state.logLines.length > 250) state.logLines.shift();
     console.log(`[PT FUT.GG] ${message}`);
     if (state.logPre) state.logPre.textContent = state.logLines.join('\n');
+  }
+
+  function readPersistentCache(prefix, key) {
+    try {
+      const raw = localStorage.getItem(`${prefix}${key}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const expiresAt = Number(parsed?.expiresAt || 0);
+      if (!expiresAt || Date.now() > expiresAt) {
+        try {
+          localStorage.removeItem(`${prefix}${key}`);
+        } catch {}
+        return null;
+      }
+      return parsed?.data || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writePersistentCache(prefix, key, data, ttlMs = PLAYER_RATE_CACHE_TTL_MS) {
+    try {
+      localStorage.setItem(
+        `${prefix}${key}`,
+        JSON.stringify({
+          expiresAt: Date.now() + ttlMs,
+          data,
+        })
+      );
+    } catch {}
   }
 
   function ensureLogUi() {
@@ -4835,6 +4868,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const key = `${game}-${eaId}`;
     const cached = state.playerCardCache.get(key);
     if (cached) return cached;
+    const persisted = readPersistentCache(PLAYER_CARD_STORAGE_PREFIX, key);
+    if (persisted) {
+      state.playerCardCache.set(key, persisted);
+      return persisted;
+    }
     const failUntil = Number(state.playerCardFailUntil.get(key) || 0);
     if (failUntil && Date.now() < failUntil) return { error: 'cooldown' };
     if (state.playerCardRequestCache.has(key)) return state.playerCardRequestCache.get(key);
@@ -4856,6 +4894,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
           bestRank: Number.isFinite(Number(best?.rank)) ? Number(best.rank) : null,
         };
         state.playerCardCache.set(key, payload);
+        writePersistentCache(PLAYER_CARD_STORAGE_PREFIX, key, payload);
         state.playerCardFailUntil.delete(key);
         return payload;
       } catch (err) {
@@ -4873,6 +4912,11 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   async function loadPlayerData(game, eaId) {
     const key = `${game}-${eaId}`;
     if (state.playerCache.has(key)) return state.playerCache.get(key);
+    const persisted = readPersistentCache(PLAYER_DETAIL_STORAGE_PREFIX, key);
+    if (persisted) {
+      state.playerCache.set(key, persisted);
+      return persisted;
+    }
     if (state.playerRequestCache.has(key)) return state.playerRequestCache.get(key);
 
     const request = (async () => {
@@ -4931,6 +4975,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
             null,
         };
         state.playerCache.set(key, payload);
+        writePersistentCache(PLAYER_DETAIL_STORAGE_PREFIX, key, payload);
         logLine(`player: loaded game=${game} eaId=${eaId} userPct=${payload.userUpPct ?? 'na'} topChem=${payload.topChemList.length}`);
         return payload;
       } catch (err) {

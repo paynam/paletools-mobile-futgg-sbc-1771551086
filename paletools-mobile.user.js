@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260405-45';
+  const BUILD_ID = 'pt-futgg-20260408-46';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -141,6 +141,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     chemStyleNamesLoadByGame: new Map(),
     lastPlayerScanAt: 0,
     lastPlayerCardScanAt: 0,
+    lastPlayerCardDebugKey: '',
     recentPlayerIds: [],
     recentSquadPayloads: [],
     networkSnifferInstalled: false,
@@ -4310,11 +4311,15 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const selectors = [
       '.ut-squad-slot-view',
       '.listFUTItem',
+      '.listFUTItem .rowContent',
       '.ut-item-view',
+      '.ut-item-view.item',
       '.ut-item-player',
+      '.ut-item-player-view',
       '.player.item',
       '.large.player',
       '.small.player',
+      '.item',
       '[class*="player-card"]',
       '[class*="item-view"]',
     ];
@@ -4330,9 +4335,102 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     });
   }
 
+  function resolveDirectPlayerCardCandidate(card) {
+    if (!card) return null;
+    const displayedName = getCardDisplayName(card);
+    const directKeys = [
+      '_item',
+      'item',
+      '_player',
+      'player',
+      'itemData',
+      '_itemData',
+      '_currentItem',
+      'currentItem',
+      '_auction',
+      'auction',
+      '__auction',
+      '_entity',
+      'entity',
+      '_viewmodel',
+      'viewmodel',
+      '__reactProps$',
+      '__reactFiber$',
+    ];
+    const seedNodes = [card, card.parentElement, card.firstElementChild, card.closest('.listFUTItem')].filter(Boolean);
+    const candidates = [];
+
+    for (const seed of seedNodes) {
+      const propNames = Object.getOwnPropertyNames(seed || {});
+      for (const prop of propNames) {
+        let value;
+        try {
+          value = seed[prop];
+        } catch {
+          continue;
+        }
+        if (!value || typeof value !== 'object') continue;
+
+        if (prop.startsWith('__reactProps$') || prop.startsWith('__reactFiber$')) {
+          const queue = [{ obj: value, path: prop, depth: 0 }];
+          const seen = new WeakSet();
+          while (queue.length) {
+            const cur = queue.shift();
+            const obj = cur?.obj;
+            const depth = cur?.depth || 0;
+            if (!obj || typeof obj !== 'object') continue;
+            if (seen.has(obj)) continue;
+            seen.add(obj);
+
+            const eaId = pickEaIdFromObject(obj);
+            if (eaId) {
+              const playerName = pickPlayerNameFromObject(obj);
+              let score = 120;
+              if (playerName) score += 20;
+              if (displayedName && playerName) score += Math.round(100 * nameSimilarityScore(displayedName, playerName));
+              candidates.push({ game: DEFAULT_GAME, eaId, playerName: playerName || null, score, source: `card-direct:${cur.path}` });
+            }
+
+            if (depth >= 3) continue;
+            for (const key of Object.keys(obj)) {
+              const child = obj[key];
+              if (!child || typeof child !== 'object') continue;
+              queue.push({ obj: child, path: `${cur.path}.${key}`, depth: depth + 1 });
+            }
+          }
+          continue;
+        }
+
+        if (!directKeys.includes(prop) && !prop.startsWith('_')) continue;
+        const eaId = pickEaIdFromObject(value);
+        const playerName = pickPlayerNameFromObject(value);
+        if (!eaId && !playerName) continue;
+        let score = 110;
+        if (prop === '_item' || prop === 'item') score += 50;
+        if (prop === '_player' || prop === 'player') score += 35;
+        if (playerName) score += 20;
+        if (displayedName && playerName) score += Math.round(100 * nameSimilarityScore(displayedName, playerName));
+        candidates.push({
+          game: DEFAULT_GAME,
+          eaId: eaId || getItemDefinitionId(value),
+          playerName: playerName || null,
+          score,
+          source: `card-direct:${prop}`,
+        });
+      }
+    }
+
+    const filtered = candidates.filter((candidate) => Number.isFinite(Number(candidate?.eaId)) && Number(candidate.eaId) >= 10000);
+    if (!filtered.length) return null;
+    filtered.sort((a, b) => b.score - a.score);
+    return filtered[0];
+  }
+
   function resolvePlayerCardContext(card) {
     if (!card) return null;
     const displayedName = getCardDisplayName(card);
+    const direct = resolveDirectPlayerCardCandidate(card);
+    if (direct) return direct;
     const seedNodes = [card, card.parentElement, card.firstElementChild].filter(Boolean);
     const goodPathRe = /(item|player|viewmodel|entity|slot|current|selected|auction|data|card|rowcontent)/i;
     const badPathRe = /(sbc|challenge|reward|objective|pack|store|message|tile|menu)/i;
@@ -4435,6 +4533,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (text) {
         injectPlayerCardChip(card, text);
         card[PLAYER_CARD_FLAG] = true;
+        logLine(`player-card: attached ${text} eaId=${ctx.eaId} source=${ctx.source || 'unknown'}`);
       }
     } catch {}
     card[PLAYER_CARD_LOADING_FLAG] = false;
@@ -4590,11 +4689,35 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (now - state.lastPlayerCardScanAt < 500) return;
     state.lastPlayerCardScanAt = now;
 
-    for (const card of getVisiblePlayerCardNodes()) {
+    const cards = getVisiblePlayerCardNodes();
+    let pending = 0;
+    let matched = 0;
+    let unresolved = 0;
+    let topMiss = '';
+
+    for (const card of cards) {
       if (!card || card[PLAYER_CARD_FLAG] || card[PLAYER_CARD_LOADING_FLAG]) continue;
+      pending += 1;
       const ctx = resolvePlayerCardContext(card);
-      if (!ctx || !Number.isFinite(Number(ctx.eaId))) continue;
+      if (!ctx || !Number.isFinite(Number(ctx.eaId))) {
+        unresolved += 1;
+        if (!topMiss) {
+          topMiss = `${getCardDisplayName(card) || 'n/a'} classes=${String(card.className || '').replace(/\s+/g, '.').slice(0, 120)}`;
+        }
+        continue;
+      }
+      matched += 1;
       decoratePlayerCard(card, ctx);
+    }
+
+    const debugKey = `${cards.length}:${pending}:${matched}:${unresolved}:${topMiss}`;
+    if (state.lastPlayerCardDebugKey !== debugKey) {
+      state.lastPlayerCardDebugKey = debugKey;
+      if (!cards.length) {
+        logLine('player-card: visible=0');
+      } else {
+        logLine(`player-card: visible=${cards.length} pending=${pending} matched=${matched} unresolved=${unresolved}${topMiss ? ` topMiss=${topMiss}` : ''}`);
+      }
     }
   }
 

@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260408-52';
+  const BUILD_ID = 'pt-futgg-20260408-53';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -4813,8 +4813,15 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     if (!card || !text) return;
     const host = getPlayerCardBadgeHost(card);
     if (!host) return;
-    const existing = host.querySelector(`.${PLAYER_CARD_CHIP_CLASS}`);
+    const existingAll = Array.from(card.querySelectorAll(`.${PLAYER_CARD_CHIP_CLASS}`));
+    const existing = existingAll[0] || null;
+    if (existingAll.length > 1) {
+      for (let i = 1; i < existingAll.length; i += 1) {
+        existingAll[i].remove();
+      }
+    }
     if (existing) {
+      if (existing.parentNode !== host) host.appendChild(existing);
       existing.textContent = text;
       return;
     }

@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260408-50';
+  const BUILD_ID = 'pt-futgg-20260408-51';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -74,6 +74,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const DAILY_STORAGE_KEY = 'pt_futgg_daily_runner_v1';
   const PLAYER_CARD_CHIP_CLASS = 'pt-futgg-player-rating-chip';
   const PLAYER_CARD_ANCHOR_CLASS = 'pt-futgg-player-rating-anchor';
+  const PLAYER_CARD_LOAD_CONCURRENCY = 3;
+  const PLAYER_CARD_FAIL_COOLDOWN_MS = 30000;
   const DEFAULT_TRADER_CONFIG = {
     enabled: false,
     searchText: '',
@@ -133,6 +135,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     squadExportDebugSeen: new Set(),
     playerMenuNode: null,
     playerCache: new Map(),
+    playerRequestCache: new Map(),
+    playerCardCache: new Map(),
+    playerCardRequestCache: new Map(),
+    playerCardFailUntil: new Map(),
+    playerCardLoadActive: 0,
+    playerCardLoadQueue: [],
     futCoreDataByGame: new Map(),
     futCoreDataLoadByGame: new Map(),
     playerDefinitionCacheByGame: new Map(),
@@ -4784,11 +4792,35 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     host.appendChild(chip);
   }
 
+  function enqueuePlayerCardTask(task) {
+    return new Promise((resolve, reject) => {
+      state.playerCardLoadQueue.push({ task, resolve, reject });
+      pumpPlayerCardQueue();
+    });
+  }
+
+  function pumpPlayerCardQueue() {
+    while (state.playerCardLoadActive < PLAYER_CARD_LOAD_CONCURRENCY && state.playerCardLoadQueue.length) {
+      const next = state.playerCardLoadQueue.shift();
+      state.playerCardLoadActive += 1;
+      Promise.resolve()
+        .then(() => next.task())
+        .then(next.resolve, next.reject)
+        .finally(() => {
+          state.playerCardLoadActive = Math.max(0, state.playerCardLoadActive - 1);
+          pumpPlayerCardQueue();
+        });
+    }
+  }
+
   async function decoratePlayerCard(card, ctx) {
     if (!card || !ctx || card[PLAYER_CARD_LOADING_FLAG]) return;
+    const key = `${ctx.game || DEFAULT_GAME}-${ctx.eaId}`;
+    const failUntil = Number(state.playerCardFailUntil.get(key) || 0);
+    if (failUntil && Date.now() < failUntil) return;
     card[PLAYER_CARD_LOADING_FLAG] = true;
     try {
-      const playerData = await loadPlayerData(ctx.game || DEFAULT_GAME, ctx.eaId);
+      const playerData = await enqueuePlayerCardTask(() => loadPlayerCardData(ctx.game || DEFAULT_GAME, ctx.eaId));
       const text = formatFutggCardRating(playerData?.bestScore);
       if (text) {
         injectPlayerCardChip(card, text);
@@ -4799,77 +4831,120 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     card[PLAYER_CARD_LOADING_FLAG] = false;
   }
 
+  async function loadPlayerCardData(game, eaId) {
+    const key = `${game}-${eaId}`;
+    const cached = state.playerCardCache.get(key);
+    if (cached) return cached;
+    const failUntil = Number(state.playerCardFailUntil.get(key) || 0);
+    if (failUntil && Date.now() < failUntil) return { error: 'cooldown' };
+    if (state.playerCardRequestCache.has(key)) return state.playerCardRequestCache.get(key);
+
+    const request = (async () => {
+      try {
+        const metarankResult = await withHardTimeout(
+          requestJson(`https://www.fut.gg/api/fut/metarank/player/${eaId}/`, {
+            proxyMakers: [FUTGG_PROXY_URLS[1]],
+          }),
+          REQUEST_HARD_TIMEOUT_MS,
+          'Player card metarank request'
+        );
+        const scores = Array.isArray(metarankResult?.data?.scores) ? metarankResult.data.scores.slice() : [];
+        scores.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
+        const best = scores[0] || null;
+        const payload = {
+          bestScore: Number.isFinite(Number(best?.score)) ? Number(best.score) : null,
+          bestRank: Number.isFinite(Number(best?.rank)) ? Number(best.rank) : null,
+        };
+        state.playerCardCache.set(key, payload);
+        state.playerCardFailUntil.delete(key);
+        return payload;
+      } catch (err) {
+        state.playerCardFailUntil.set(key, Date.now() + PLAYER_CARD_FAIL_COOLDOWN_MS);
+        throw err;
+      } finally {
+        state.playerCardRequestCache.delete(key);
+      }
+    })();
+
+    state.playerCardRequestCache.set(key, request);
+    return request;
+  }
+
   async function loadPlayerData(game, eaId) {
     const key = `${game}-${eaId}`;
     if (state.playerCache.has(key)) return state.playerCache.get(key);
+    if (state.playerRequestCache.has(key)) return state.playerRequestCache.get(key);
 
-    logLine(`player: loading game=${game} eaId=${eaId}`);
+    const request = (async () => {
+      logLine(`player: loading game=${game} eaId=${eaId}`);
 
-    try {
-      const itemPayload = await withHardTimeout(
-        requestJson(`https://www.fut.gg/api/fut/player-item-definitions/${game}/${eaId}/?`),
-        REQUEST_HARD_TIMEOUT_MS,
-        'Player definition request'
-      );
-      const itemId = Number(itemPayload?.data?.id);
-      const firstName = String(itemPayload?.data?.firstName || '').trim();
-      const lastName = String(itemPayload?.data?.lastName || '').trim();
-      const fallbackName = String(itemPayload?.data?.name || '').trim();
-      const playerName = [firstName, lastName].filter(Boolean).join(' ') || fallbackName || null;
-      const identifiers = Number.isFinite(itemId) ? `${PLAYER_CONTENT_TYPE}_${itemId}` : null;
+      try {
+        const itemPayload = await withHardTimeout(
+          requestJson(`https://www.fut.gg/api/fut/player-item-definitions/${game}/${eaId}/?`),
+          REQUEST_HARD_TIMEOUT_MS,
+          'Player definition request'
+        );
+        const itemId = Number(itemPayload?.data?.id);
+        const firstName = String(itemPayload?.data?.firstName || '').trim();
+        const lastName = String(itemPayload?.data?.lastName || '').trim();
+        const fallbackName = String(itemPayload?.data?.name || '').trim();
+        const playerName = [firstName, lastName].filter(Boolean).join(' ') || fallbackName || null;
+        const identifiers = Number.isFinite(itemId) ? `${PLAYER_CONTENT_TYPE}_${itemId}` : null;
 
-      const [voteResult, metarankResult, chemResult, priceResult, chemNameMap] = await Promise.all([
-        identifiers
-          ? withHardTimeout(requestJson(`${FUTGG_VOTING_URL}${encodeURIComponent(identifiers)}`), REQUEST_HARD_TIMEOUT_MS, 'Player voting request')
-          : Promise.resolve(null),
-        withHardTimeout(requestJson(`https://www.fut.gg/api/fut/metarank/player/${eaId}/`), REQUEST_HARD_TIMEOUT_MS, 'Player metarank request'),
-        withHardTimeout(requestJson(`https://www.fut.gg/api/fut/players/${game}/${eaId}/chemistry-style/`), REQUEST_HARD_TIMEOUT_MS, 'Player chemistry request'),
-        withHardTimeout(requestJson(`https://www.fut.gg/api/fut/player-prices/${game}/${eaId}/`), REQUEST_HARD_TIMEOUT_MS, 'Player price request').catch(() => null),
-        ensureChemStyleNames(game),
-      ]);
+        const [cardPayload, voteResult, chemResult, priceResult, chemNameMap] = await Promise.all([
+          loadPlayerCardData(game, eaId).catch(() => null),
+          identifiers
+            ? withHardTimeout(requestJson(`${FUTGG_VOTING_URL}${encodeURIComponent(identifiers)}`), REQUEST_HARD_TIMEOUT_MS, 'Player voting request')
+            : Promise.resolve(null),
+          withHardTimeout(requestJson(`https://www.fut.gg/api/fut/players/${game}/${eaId}/chemistry-style/`), REQUEST_HARD_TIMEOUT_MS, 'Player chemistry request'),
+          withHardTimeout(requestJson(`https://www.fut.gg/api/fut/player-prices/${game}/${eaId}/`), REQUEST_HARD_TIMEOUT_MS, 'Player price request').catch(() => null),
+          ensureChemStyleNames(game),
+        ]);
 
-      const voteRow = Array.isArray(voteResult?.data) ? voteResult.data[0] : null;
-      const up = Number(voteRow?.upvotes || 0);
-      const total = Number(voteRow?.totalVotes || up + Number(voteRow?.downvotes || 0) || 0);
-      const userUpPct = total > 0 ? Math.round((up * 100) / total) : null;
+        const voteRow = Array.isArray(voteResult?.data) ? voteResult.data[0] : null;
+        const up = Number(voteRow?.upvotes || 0);
+        const total = Number(voteRow?.totalVotes || up + Number(voteRow?.downvotes || 0) || 0);
+        const userUpPct = total > 0 ? Math.round((up * 100) / total) : null;
 
-      const scores = Array.isArray(metarankResult?.data?.scores) ? metarankResult.data.scores.slice() : [];
-      scores.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
-      const best = scores[0] || null;
+        const topStyles = Array.isArray(chemResult?.data?.top3ChemistryStyles) ? chemResult.data.top3ChemistryStyles : [];
+        const topChemList = topStyles
+          .map((entry) => {
+            const id = Number(Array.isArray(entry) ? entry[0] : null);
+            const pct = Number(Array.isArray(entry) ? entry[1] : null);
+            if (!Number.isFinite(id) || !Number.isFinite(pct)) return null;
+            const name = chemNameMap.get(id) || `Style ${id}`;
+            return `${name} ${pct}%`;
+          })
+          .filter(Boolean);
 
-      const topStyles = Array.isArray(chemResult?.data?.top3ChemistryStyles) ? chemResult.data.top3ChemistryStyles : [];
-      const topChemList = topStyles
-        .map((entry) => {
-          const id = Number(Array.isArray(entry) ? entry[0] : null);
-          const pct = Number(Array.isArray(entry) ? entry[1] : null);
-          if (!Number.isFinite(id) || !Number.isFinite(pct)) return null;
-          const name = chemNameMap.get(id) || `Style ${id}`;
-          return `${name} ${pct}%`;
-        })
-        .filter(Boolean);
+        const payload = {
+          playerName,
+          userUpPct,
+          userVotes: total,
+          bestScore: Number.isFinite(Number(cardPayload?.bestScore)) ? Number(cardPayload.bestScore) : null,
+          bestRank: Number.isFinite(Number(cardPayload?.bestRank)) ? Number(cardPayload.bestRank) : null,
+          topChemList,
+          price:
+            Number(priceResult?.data?.currentPrice?.price) ||
+            Number(priceResult?.data?.overview?.averageBin) ||
+            Number(priceResult?.data?.overview?.cheapestSale) ||
+            null,
+        };
+        state.playerCache.set(key, payload);
+        logLine(`player: loaded game=${game} eaId=${eaId} userPct=${payload.userUpPct ?? 'na'} topChem=${payload.topChemList.length}`);
+        return payload;
+      } catch (err) {
+        const payload = { error: 'failed to load player ratings' };
+        state.playerCache.set(key, payload);
+        logLine(`player: load failed game=${game} eaId=${eaId} :: ${String(err)}`);
+        return payload;
+      } finally {
+        state.playerRequestCache.delete(key);
+      }
+    })();
 
-      const payload = {
-        playerName,
-        userUpPct,
-        userVotes: total,
-        bestScore: Number.isFinite(Number(best?.score)) ? Number(best.score) : null,
-        bestRank: Number.isFinite(Number(best?.rank)) ? Number(best.rank) : null,
-        topChemList,
-        price:
-          Number(priceResult?.data?.currentPrice?.price) ||
-          Number(priceResult?.data?.overview?.averageBin) ||
-          Number(priceResult?.data?.overview?.cheapestSale) ||
-          null,
-      };
-      state.playerCache.set(key, payload);
-      logLine(`player: loaded game=${game} eaId=${eaId} userPct=${payload.userUpPct ?? 'na'} topChem=${payload.topChemList.length}`);
-      return payload;
-    } catch (err) {
-      const payload = { error: 'failed to load player ratings' };
-      state.playerCache.set(key, payload);
-      logLine(`player: load failed game=${game} eaId=${eaId} :: ${String(err)}`);
-      return payload;
-    }
+    state.playerRequestCache.set(key, request);
+    return request;
   }
 
   async function scanPlayerDetails() {
@@ -5124,8 +5199,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     });
   }
 
-  async function browserRequest(url) {
-    const urls = [url].concat(FUTGG_PROXY_URLS.map((makeProxyUrl) => makeProxyUrl(url)));
+  async function browserRequest(url, options = {}) {
+    const proxyMakers = Array.isArray(options?.proxyMakers) && options.proxyMakers.length ? options.proxyMakers : FUTGG_PROXY_URLS;
+    const timeoutMs = Number.isFinite(Number(options?.timeoutMs)) ? Number(options.timeoutMs) : REQUEST_TIMEOUT_MS;
+    const urls = [url].concat(proxyMakers.map((makeProxyUrl) => makeProxyUrl(url)));
     let lastError = null;
 
     for (const candidate of urls) {
@@ -5142,8 +5219,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
             try {
               controller.abort();
             } catch {}
-            reject(new Error(`Timeout after ${REQUEST_TIMEOUT_MS}ms`));
-          }, REQUEST_TIMEOUT_MS);
+            reject(new Error(`Timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
         });
         const response = await Promise.race([fetchPromise, timeoutPromise]);
         clearTimeout(timer);
@@ -5161,9 +5238,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     throw lastError || new Error('All request methods failed');
   }
 
-  function requestJson(url) {
+  function requestJson(url, options = {}) {
     if (typeof GM_xmlhttpRequest === 'function') return gmRequest(url);
-    return browserRequest(url);
+    return browserRequest(url, options);
   }
 
   function withHardTimeout(promise, ms, label) {

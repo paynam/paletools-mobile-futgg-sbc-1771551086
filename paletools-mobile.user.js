@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260408-46';
+  const BUILD_ID = 'pt-futgg-20260408-47';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -4330,7 +4330,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (!isElementVisible(node)) return false;
       const cls = String(node.className || '').toLowerCase();
       if (cls.includes('sbc') || cls.includes('challenge') || cls.includes('reward')) return false;
+      if (cls.includes('manager') || cls.includes('staff') || cls.includes('coach') || cls.includes('kit')) return false;
       if (node.closest('.ut-sbc-set-tile-view, .ut-sbc-challenge-tile-view, .ut-sbc-challenge-table-row-view')) return false;
+      if (node.closest('.manager, .staff')) return false;
       return true;
     });
   }
@@ -4357,7 +4359,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       '__reactProps$',
       '__reactFiber$',
     ];
-    const seedNodes = [card, card.parentElement, card.firstElementChild, card.closest('.listFUTItem')].filter(Boolean);
+    const seedNodes = [
+      card,
+      card.parentElement,
+      card.firstElementChild,
+      card.closest('.listFUTItem'),
+      ...Array.from(card.querySelectorAll('.rowContent, .entityContainer, .item, .itemContent, .player, .ut-item-view')).slice(0, 8),
+    ].filter(Boolean);
     const candidates = [];
 
     for (const seed of seedNodes) {
@@ -4431,7 +4439,12 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const displayedName = getCardDisplayName(card);
     const direct = resolveDirectPlayerCardCandidate(card);
     if (direct) return direct;
-    const seedNodes = [card, card.parentElement, card.firstElementChild].filter(Boolean);
+    const seedNodes = [
+      card,
+      card.parentElement,
+      card.firstElementChild,
+      ...Array.from(card.querySelectorAll('.rowContent, .entityContainer, .item, .itemContent, .player, .ut-item-view')).slice(0, 8),
+    ].filter(Boolean);
     const goodPathRe = /(item|player|viewmodel|entity|slot|current|selected|auction|data|card|rowcontent)/i;
     const badPathRe = /(sbc|challenge|reward|objective|pack|store|message|tile|menu)/i;
     const candidates = [];
@@ -4442,7 +4455,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         const queue = [{ node: internal.obj, path: internal.key, depth: 0 }];
         const seen = new WeakSet();
         let visited = 0;
-        while (queue.length && visited < 180) {
+        while (queue.length && visited < 260) {
           const cur = queue.shift();
           const obj = cur?.node;
           const depth = cur?.depth || 0;
@@ -4469,7 +4482,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
             });
           }
 
-          if (depth >= 4) continue;
+          if (depth >= 5) continue;
           for (const key of Object.keys(obj)) {
             if (!key || key.startsWith('__')) continue;
             const val = obj[key];
@@ -4694,6 +4707,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     let matched = 0;
     let unresolved = 0;
     let topMiss = '';
+    let topMissKeys = '';
 
     for (const card of cards) {
       if (!card || card[PLAYER_CARD_FLAG] || card[PLAYER_CARD_LOADING_FLAG]) continue;
@@ -4703,6 +4717,10 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         unresolved += 1;
         if (!topMiss) {
           topMiss = `${getCardDisplayName(card) || 'n/a'} classes=${String(card.className || '').replace(/\s+/g, '.').slice(0, 120)}`;
+          topMissKeys = extractInternalObjectsFromNode(card)
+            .map((entry) => entry.key)
+            .slice(0, 12)
+            .join('|');
         }
         continue;
       }
@@ -4716,7 +4734,9 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
       if (!cards.length) {
         logLine('player-card: visible=0');
       } else {
-        logLine(`player-card: visible=${cards.length} pending=${pending} matched=${matched} unresolved=${unresolved}${topMiss ? ` topMiss=${topMiss}` : ''}`);
+        logLine(
+          `player-card: visible=${cards.length} pending=${pending} matched=${matched} unresolved=${unresolved}${topMiss ? ` topMiss=${topMiss}` : ''}${topMissKeys ? ` topKeys=${topMissKeys}` : ''}`
+        );
       }
     }
   }

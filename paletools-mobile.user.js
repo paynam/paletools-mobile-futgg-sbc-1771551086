@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260408-49';
+  const BUILD_ID = 'pt-futgg-20260408-50';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -4480,6 +4480,81 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return true;
   }
 
+  function resolvePlayerCardContextFromDom(card) {
+    if (!card) return null;
+    const displayedName = getCardDisplayName(card);
+    const candidates = [];
+    const seen = new Set();
+    const seedNodes = [
+      card,
+      card.parentElement,
+      card.firstElementChild,
+      card.closest('.listFUTItem'),
+      card.closest('.rowContent'),
+      card.closest('.entityContainer'),
+      ...Array.from(
+        card.querySelectorAll(
+          '[data-player-definition-id], [data-definition-id], [data-entity-id], [data-resource-id], [data-id], [data-item-id], .player-definition-id, [class*="definition-id"], a[href], img[src], source[srcset], [style*="url("]'
+        )
+      ).slice(0, 32),
+    ].filter(Boolean);
+
+    const addCandidate = (eaId, source, playerName, bonus = 0) => {
+      const numericId = Number(eaId);
+      if (!Number.isFinite(numericId) || numericId < 10000) return;
+      const key = `${numericId}:${source}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      let score = 80 + bonus;
+      if (/data-player-definition-id|data-definition-id|player-definition-id/i.test(source)) score += 40;
+      if (/data-entity-id|data-resource-id|data-item-id/i.test(source)) score += 20;
+      if (/href|src|srcset|style/i.test(source)) score += 10;
+      if (playerName) score += 20;
+      if (displayedName && playerName) score += Math.round(100 * nameSimilarityScore(displayedName, playerName));
+      candidates.push({
+        game: DEFAULT_GAME,
+        eaId: numericId,
+        playerName: playerName || null,
+        score,
+        source: `card-dom:${source}`,
+      });
+    };
+
+    for (const node of seedNodes) {
+      const name = getCardDisplayName(node.closest('.listFUTItem, .large.player, .small.player, .ut-item-view, .item') || node) || displayedName;
+      const attrNames = [
+        'data-player-definition-id',
+        'data-definition-id',
+        'data-entity-id',
+        'data-resource-id',
+        'data-id',
+        'data-item-id',
+        'href',
+        'src',
+        'srcset',
+        'style',
+      ];
+      for (const attr of attrNames) {
+        const raw = String(node.getAttribute?.(attr) || '').trim();
+        if (!raw) continue;
+        const parsed = parseGameEaIdFromText(raw);
+        if (parsed?.eaId) addCandidate(parsed.eaId, attr, name, 10);
+        const ids = extractEaIdsFromText(raw);
+        for (const id of ids.slice(0, 4)) addCandidate(id, attr, name);
+      }
+
+      const classIds = extractEaIdsFromText(String(node.className || ''));
+      for (const id of classIds.slice(0, 4)) addCandidate(id, 'className', name);
+
+      const textIds = extractEaIdsFromText(String(node.textContent || ''));
+      for (const id of textIds.slice(0, 2)) addCandidate(id, 'textContent', name, -10);
+    }
+
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0];
+  }
+
   function resolveDirectPlayerCardCandidate(card) {
     if (!card) return null;
     const displayedName = getCardDisplayName(card);
@@ -4595,6 +4670,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   function resolvePlayerCardContext(card) {
     if (!card) return null;
     const displayedName = getCardDisplayName(card);
+    const fromDom = resolvePlayerCardContextFromDom(card);
+    if (fromDom) return fromDom;
     const direct = resolveDirectPlayerCardCandidate(card);
     if (direct) return direct;
     const ancestors = [];
@@ -4889,9 +4966,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         unresolved += 1;
         if (!topMiss) {
           topMiss = `${getCardDisplayName(card) || 'n/a'} classes=${String(card.className || '').replace(/\s+/g, '.').slice(0, 120)}`;
-          topMissKeys = extractInternalObjectsFromNode(card)
-            .map((entry) => entry.key)
+          topMissKeys = [
+            ...extractInternalObjectsFromNode(card).map((entry) => entry.key),
+            ...extractInternalObjectsFromNode(card.closest('.listFUTItem') || null).map((entry) => `list:${entry.key}`),
+            ...extractInternalObjectsFromNode(card.closest('.rowContent') || null).map((entry) => `row:${entry.key}`),
+          ]
             .slice(0, 12)
+            .filter(Boolean)
             .join('|');
         }
         continue;

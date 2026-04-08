@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260408-47';
+  const BUILD_ID = 'pt-futgg-20260408-48';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -4337,6 +4337,138 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     });
   }
 
+  function getVisibleSquadSlotNodes() {
+    const seen = new Set();
+    const keyed = new Map();
+    const nodes = Array.from(document.querySelectorAll('.ut-squad-slot-view')).filter((node) => {
+      if (!node || seen.has(node)) return false;
+      seen.add(node);
+      return isElementVisible(node);
+    });
+    for (const node of nodes) {
+      const rect = node.getBoundingClientRect();
+      const key = [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)].join(':');
+      const prev = keyed.get(key);
+      if (!prev || node.querySelector('.player, .ut-item-view, .item, .entityContainer')) keyed.set(key, node);
+    }
+    return Array.from(keyed.values());
+  }
+
+  function getActiveSquadCandidateForBadges() {
+    const candidates = [getActiveSquadFromUiRoots(), getActiveSquadFromControllers()].filter(Boolean);
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+    return candidates[0];
+  }
+
+  function buildSquadBadgeRows(candidate) {
+    const players = Array.isArray(candidate?.players) ? candidate.players : [];
+    const rows = [];
+    for (let i = 0; i < players.length; i += 1) {
+      const slot = players[i];
+      const item = extractItemFromSquadSlot(slot);
+      const eaId = pickEaIdFromObject(item);
+      if (!item || !Number.isFinite(Number(eaId))) continue;
+      rows.push({
+        eaId: Number(eaId),
+        playerName: pickPlayerNameFromObject(item) || '',
+        squadPosition: getSquadSlotLabel(slot, item, i, players.length),
+        slotIndex: i + 1,
+      });
+    }
+    return rows;
+  }
+
+  function getSquadSlotNodeLabel(node, fallbackIndex) {
+    const text = String(node?.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toUpperCase();
+    if (!text) {
+      if (fallbackIndex < 11) return `STARTER ${fallbackIndex + 1}`;
+      if (fallbackIndex < 18) return `BENCH ${fallbackIndex - 10}`;
+      return `RESERVE ${fallbackIndex - 17}`;
+    }
+    const posMatch = text.match(/\b(GK|RB|RWB|LB|LWB|CB|RCB|LCB|CDM|RDM|LDM|CM|RCM|LCM|RM|LM|CAM|RAM|LAM|CF|RF|LF|RW|LW|ST|RS|LS)\b/);
+    if (posMatch) return posMatch[1];
+    return fallbackIndex < 11
+      ? `STARTER ${fallbackIndex + 1}`
+      : fallbackIndex < 18
+        ? `BENCH ${fallbackIndex - 10}`
+        : `RESERVE ${fallbackIndex - 17}`;
+  }
+
+  function mapVisibleSquadSlots(candidate, slotNodes) {
+    const rows = buildSquadBadgeRows(candidate);
+    if (!rows.length || !slotNodes.length) return [];
+
+    const starters = [];
+    for (const row of rows) {
+      if (/^(GK|RB|RWB|LB|LWB|CB|RCB|LCB|CDM|RDM|LDM|CM|RCM|LCM|RM|LM|CAM|RAM|LAM|CF|RF|LF|RW|LW|ST|RS|LS)$/i.test(row.squadPosition)) {
+        starters.push(row);
+      }
+    }
+
+    const usedRows = new Set();
+    const mapped = [];
+    for (let i = 0; i < slotNodes.length; i += 1) {
+      const node = slotNodes[i];
+      const label = getSquadSlotNodeLabel(node, i);
+      let row = null;
+      if (/^(GK|RB|RWB|LB|LWB|CB|RCB|LCB|CDM|RDM|LDM|CM|RCM|LCM|RM|LM|CAM|RAM|LAM|CF|RF|LF|RW|LW|ST|RS|LS)$/i.test(label)) {
+        row = starters.find((entry) => !usedRows.has(entry) && String(entry.squadPosition).toUpperCase() === label);
+      }
+      if (!row) {
+        row = rows.find((entry) => !usedRows.has(entry) && entry.slotIndex === i + 1);
+      }
+      if (!row) continue;
+      usedRows.add(row);
+      mapped.push({ node, row });
+    }
+    return mapped;
+  }
+
+  function scanSquadPlayerCards() {
+    const slotNodes = getVisibleSquadSlotNodes();
+    if (!slotNodes.length) return false;
+
+    const candidate = getActiveSquadCandidateForBadges();
+    if (!candidate) {
+      const debugKey = `squad:visible=${slotNodes.length}:none`;
+      if (state.lastPlayerCardDebugKey !== debugKey) {
+        state.lastPlayerCardDebugKey = debugKey;
+        logLine(`player-card: visible=${slotNodes.length} pending=${slotNodes.length} matched=0 unresolved=${slotNodes.length} topMiss=n/a classes=ut-squad-slot-view squadSource=none`);
+      }
+      return true;
+    }
+
+    const mapped = mapVisibleSquadSlots(candidate, slotNodes);
+    let pending = 0;
+    let matched = 0;
+    for (const entry of mapped) {
+      const card = entry.node;
+      if (!card || card[PLAYER_CARD_FLAG] || card[PLAYER_CARD_LOADING_FLAG]) continue;
+      pending += 1;
+      matched += 1;
+      decoratePlayerCard(card, {
+        game: DEFAULT_GAME,
+        eaId: entry.row.eaId,
+        playerName: entry.row.playerName || null,
+        source: `squad:${candidate.source}:${entry.row.squadPosition}`,
+      });
+    }
+
+    const unresolved = Math.max(0, slotNodes.length - mapped.length);
+    const debugKey = `squad:${slotNodes.length}:${pending}:${matched}:${unresolved}:${candidate.source}`;
+    if (state.lastPlayerCardDebugKey !== debugKey) {
+      state.lastPlayerCardDebugKey = debugKey;
+      logLine(
+        `player-card: squad visible=${slotNodes.length} mapped=${mapped.length} pending=${pending} matched=${matched} unresolved=${unresolved} source=${candidate.source}`
+      );
+    }
+    return true;
+  }
+
   function resolveDirectPlayerCardCandidate(card) {
     if (!card) return null;
     const displayedName = getCardDisplayName(card);
@@ -4701,6 +4833,8 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     const now = Date.now();
     if (now - state.lastPlayerCardScanAt < 500) return;
     state.lastPlayerCardScanAt = now;
+
+    if (scanSquadPlayerCards()) return;
 
     const cards = getVisiblePlayerCardNodes();
     let pending = 0;

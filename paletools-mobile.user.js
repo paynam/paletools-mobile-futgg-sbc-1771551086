@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260408-53';
+  const BUILD_ID = 'pt-futgg-20260419-54';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -72,7 +72,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
   const DEFAULT_GAME = '26';
   const TRADER_STORAGE_KEY = 'pt_futgg_auto_trader_v1';
   const DAILY_STORAGE_KEY = 'pt_futgg_daily_runner_v1';
-  const PLAYER_CARD_STORAGE_PREFIX = 'pt_futgg_card_rate_v1:';
+  const PLAYER_CARD_STORAGE_PREFIX = 'pt_futgg_card_rate_v2:';
   const PLAYER_DETAIL_STORAGE_PREFIX = 'pt_futgg_player_rate_v1:';
   const PLAYER_CARD_CHIP_CLASS = 'pt-futgg-player-rating-chip';
   const PLAYER_CARD_ANCHOR_CLASS = 'pt-futgg-player-rating-anchor';
@@ -3261,6 +3261,15 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return `${Math.round(num)}`;
   }
 
+  function extractFutggPrice(payload) {
+    return (
+      Number(payload?.data?.currentPrice?.price) ||
+      Number(payload?.data?.overview?.averageBin) ||
+      Number(payload?.data?.overview?.cheapestSale) ||
+      null
+    );
+  }
+
   function isVisible(node) {
     if (!node || typeof node.getBoundingClientRect !== 'function') return false;
     const rect = node.getBoundingClientRect();
@@ -4331,10 +4340,13 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     return `FUT.GG: ${parts.join(' | ')}`;
   }
 
-  function formatFutggCardRating(score) {
-    const value = Number(score);
-    if (!Number.isFinite(value)) return '';
-    return `GG ${value.toFixed(1)}`;
+  function formatFutggCardChip(playerData) {
+    const score = Number(playerData?.bestScore);
+    const parts = [];
+    if (Number.isFinite(score)) parts.push(`GG ${score.toFixed(1)}`);
+    const price = formatCoins(playerData?.price);
+    if (price) parts.push(price);
+    return parts.join(' · ');
   }
 
   function getCardDisplayName(card) {
@@ -4861,7 +4873,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     card[PLAYER_CARD_LOADING_FLAG] = true;
     try {
       const playerData = await enqueuePlayerCardTask(() => loadPlayerCardData(ctx.game || DEFAULT_GAME, ctx.eaId));
-      const text = formatFutggCardRating(playerData?.bestScore);
+      const text = formatFutggCardChip(playerData);
       if (text) {
         injectPlayerCardChip(card, text);
         card[PLAYER_CARD_FLAG] = true;
@@ -4886,19 +4898,29 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     const request = (async () => {
       try {
-        const metarankResult = await withHardTimeout(
-          requestJson(`https://www.fut.gg/api/fut/metarank/player/${eaId}/`, {
-            proxyMakers: [FUTGG_PROXY_URLS[1]],
-          }),
-          REQUEST_HARD_TIMEOUT_MS,
-          'Player card metarank request'
-        );
+        const [metarankResult, priceResult] = await Promise.all([
+          withHardTimeout(
+            requestJson(`https://www.fut.gg/api/fut/metarank/player/${eaId}/`, {
+              proxyMakers: [FUTGG_PROXY_URLS[1]],
+            }),
+            REQUEST_HARD_TIMEOUT_MS,
+            'Player card metarank request'
+          ),
+          withHardTimeout(
+            requestJson(`https://www.fut.gg/api/fut/player-prices/${game}/${eaId}/`, {
+              proxyMakers: [FUTGG_PROXY_URLS[1]],
+            }),
+            REQUEST_HARD_TIMEOUT_MS,
+            'Player card price request'
+          ).catch(() => null),
+        ]);
         const scores = Array.isArray(metarankResult?.data?.scores) ? metarankResult.data.scores.slice() : [];
         scores.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
         const best = scores[0] || null;
         const payload = {
           bestScore: Number.isFinite(Number(best?.score)) ? Number(best.score) : null,
           bestRank: Number.isFinite(Number(best?.rank)) ? Number(best.rank) : null,
+          price: extractFutggPrice(priceResult),
         };
         state.playerCardCache.set(key, payload);
         writePersistentCache(PLAYER_CARD_STORAGE_PREFIX, key, payload);
@@ -4975,11 +4997,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
           bestScore: Number.isFinite(Number(cardPayload?.bestScore)) ? Number(cardPayload.bestScore) : null,
           bestRank: Number.isFinite(Number(cardPayload?.bestRank)) ? Number(cardPayload.bestRank) : null,
           topChemList,
-          price:
-            Number(priceResult?.data?.currentPrice?.price) ||
-            Number(priceResult?.data?.overview?.averageBin) ||
-            Number(priceResult?.data?.overview?.cheapestSale) ||
-            null,
+          price: extractFutggPrice(priceResult),
         };
         state.playerCache.set(key, payload);
         writePersistentCache(PLAYER_DETAIL_STORAGE_PREFIX, key, payload);

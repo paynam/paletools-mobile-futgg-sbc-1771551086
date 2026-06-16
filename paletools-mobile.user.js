@@ -38,7 +38,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
   const FUTGG_SBC_LIST_URL = 'https://www.fut.gg/api/fut/sbc/?no_pagination=true';
   const FUTGG_VOTING_URL = 'https://www.fut.gg/api/voting/entities/?identifiers=';
-  const BUILD_ID = 'pt-futgg-20260419-54';
+  const BUILD_ID = 'pt-futgg-20260616-55';
   const ADDON_RUNTIME_KEY = '__pt_futgg_addon_runtime__';
   const REQUEST_TIMEOUT_MS = 10000;
   const REQUEST_HARD_TIMEOUT_MS = 15000;
@@ -47,6 +47,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
     (url) => `https://cors.isomorphic-git.org/${url}`,
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    (url) => `https://r.jina.ai/http://r.jina.ai/http://${url}`,
   ];
   const CHIP_CLASS = 'pt-futgg-sbc-rating-chip';
   const CHIP_ANCHOR_CLASS = 'pt-futgg-sbc-card-anchor';
@@ -4898,29 +4899,20 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
 
     const request = (async () => {
       try {
-        const [metarankResult, priceResult] = await Promise.all([
-          withHardTimeout(
-            requestJson(`https://www.fut.gg/api/fut/metarank/player/${eaId}/`, {
-              proxyMakers: [FUTGG_PROXY_URLS[1]],
-            }),
-            REQUEST_HARD_TIMEOUT_MS,
-            'Player card metarank request'
-          ),
-          withHardTimeout(
-            requestJson(`https://www.fut.gg/api/fut/player-prices/${game}/${eaId}/`, {
-              proxyMakers: [FUTGG_PROXY_URLS[1]],
-            }),
-            REQUEST_HARD_TIMEOUT_MS,
-            'Player card price request'
-          ).catch(() => null),
-        ]);
+        const metarankResult = await withHardTimeout(
+          requestJson(`https://www.fut.gg/api/fut/metarank/player/${eaId}/`, {
+            proxyMakers: [FUTGG_PROXY_URLS[1], FUTGG_PROXY_URLS[4]],
+          }),
+          REQUEST_HARD_TIMEOUT_MS,
+          'Player card metarank request'
+        );
         const scores = Array.isArray(metarankResult?.data?.scores) ? metarankResult.data.scores.slice() : [];
         scores.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
         const best = scores[0] || null;
         const payload = {
           bestScore: Number.isFinite(Number(best?.score)) ? Number(best.score) : null,
           bestRank: Number.isFinite(Number(best?.rank)) ? Number(best.rank) : null,
-          price: extractFutggPrice(priceResult),
+          price: null,
         };
         state.playerCardCache.set(key, payload);
         writePersistentCache(PLAYER_CARD_STORAGE_PREFIX, key, payload);
@@ -4970,7 +4962,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
             ? withHardTimeout(requestJson(`${FUTGG_VOTING_URL}${encodeURIComponent(identifiers)}`), REQUEST_HARD_TIMEOUT_MS, 'Player voting request')
             : Promise.resolve(null),
           withHardTimeout(requestJson(`https://www.fut.gg/api/fut/players/${game}/${eaId}/chemistry-style/`), REQUEST_HARD_TIMEOUT_MS, 'Player chemistry request'),
-          withHardTimeout(requestJson(`https://www.fut.gg/api/fut/player-prices/${game}/${eaId}/`), REQUEST_HARD_TIMEOUT_MS, 'Player price request').catch(() => null),
+          Promise.resolve(null),
           ensureChemStyleNames(game),
         ]);
 
@@ -5295,7 +5287,7 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
         const response = await Promise.race([fetchPromise, timeoutPromise]);
         clearTimeout(timer);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
+        const payload = parseRequestJson(await response.text(), candidate);
         if (candidate !== url) setStatus('using CORS proxy', 'warn');
         logLine(`request: fetch success ${candidate}`);
         return payload;
@@ -5306,6 +5298,31 @@ function a0_0x2884(_0xd08459,_0x221d1d){const _0x2f110c=a0_0x2f11();return a0_0x
     }
 
     throw lastError || new Error('All request methods failed');
+  }
+
+  function parseRequestJson(text, sourceUrl = '') {
+    const raw = String(text || '').trim();
+    if (!raw) throw new Error('Empty response');
+    try {
+      return JSON.parse(raw);
+    } catch {}
+
+    const marker = 'Markdown Content:';
+    const markerIndex = raw.indexOf(marker);
+    if (markerIndex >= 0) {
+      if (/Title:\s*Just a moment/i.test(raw) || /Target URL returned error 403/i.test(raw)) {
+        throw new Error(`Proxy returned blocked response ${sourceUrl}`);
+      }
+      const body = raw.slice(markerIndex + marker.length).trim();
+      if (!body) throw new Error(`Proxy returned empty JSON body ${sourceUrl}`);
+      try {
+        return JSON.parse(body);
+      } catch (err) {
+        throw new Error(`Proxy JSON parse failed ${sourceUrl}: ${String(err)}`);
+      }
+    }
+
+    throw new Error(`Invalid JSON response ${sourceUrl}`);
   }
 
   function requestJson(url, options = {}) {
